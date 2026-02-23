@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outlook Web Client - OAuth Token</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f3f2f1;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Main Layout */
+        .app-container {
+            display: flex;
+            height: 100vh;
+            background: white;
+        }
+
+        /* Left Navigation - Outlook Style */
+        .nav-pane {
+            width: 64px;
+            background: #0078d4;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 20px;
+        }
+
+        .nav-item {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-item.active {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .nav-item svg {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #faf9f8;
+        }
+
+        /* Token Bar - Outlook Style */
+        .token-bar {
+            background: white;
+            padding: 12px 24px;
+            border-bottom: 1px solid #edebe9;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+
+        .token-input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid #8a8886;
+            border-radius: 4px;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            background: #faf9f8;
+        }
+
+        .token-input:focus {
+            outline: none;
+            border-color: #0078d4;
+            box-shadow: 0 0 0 2px rgba(0,120,212,0.3);
+        }
+
+        .token-status {
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .status-loading {
+            background: #fff4ce;
+            color: #8e6f00;
+        }
+
+        .status-valid {
+            background: #dff6dd;
+            color: #0b5a0b;
+        }
+
+        .status-invalid {
+            background: #fde7e9;
+            color: #a4262c;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #0078d4;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #106ebe;
+        }
+
+        .btn-primary:disabled {
+            background: #c7e0f4;
+            cursor: not-allowed;
+        }
+
+        /* Email Layout - Outlook Style */
+        .email-layout {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            background: white;
+        }
+
+        /* Folder Pane */
+        .folder-pane {
+            width: 240px;
+            background: #faf9f8;
+            border-right: 1px solid #edebe9;
+            overflow-y: auto;
+        }
+
+        .folder-header {
+            padding: 16px 16px 8px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #323130;
+        }
+
+        .folder-item {
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            color: #323130;
+            font-size: 14px;
+            border-radius: 4px;
+            margin: 2px 8px;
+        }
+
+        .folder-item:hover {
+            background: #edebe9;
+        }
+
+        .folder-item.active {
+            background: #e1f0fa;
+            color: #0078d4;
+        }
+
+        .folder-icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .folder-name {
+            flex: 1;
+        }
+
+        .folder-count {
+            color: #605e5c;
+            font-size: 12px;
+        }
+
+        /* Message List */
+        .message-pane {
+            width: 400px;
+            border-right: 1px solid #edebe9;
+            display: flex;
+            flex-direction: column;
+            background: white;
+        }
+
+        .message-list-header {
+            padding: 16px;
+            border-bottom: 1px solid #edebe9;
+            background: #faf9f8;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .search-box {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #8a8886;
+            border-radius: 4px;
+            font-size: 14px;
+            background: white;
+        }
+
+        .filter-btn {
+            padding: 6px 12px;
+            border: 1px solid #8a8886;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .message-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .message-item {
+            padding: 16px;
+            border-bottom: 1px solid #edebe9;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .message-item:hover {
+            background: #f5f5f5;
+        }
+
+        .message-item.unread {
+            background: #f0f6fa;
+        }
+
+        .message-item.unread .message-sender {
+            font-weight: 700;
+        }
+
+        .message-item.unread .message-subject {
+            font-weight: 600;
+        }
+
+        .message-item.selected {
+            background: #e1f0fa;
+            border-left: 3px solid #0078d4;
+        }
+
+        .message-sender {
+            font-size: 14px;
+            color: #201f1e;
+            margin-bottom: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .message-date {
+            font-size: 12px;
+            color: #605e5c;
+        }
+
+        .message-subject {
+            font-size: 14px;
+            color: #323130;
+            margin-bottom: 4px;
+        }
+
+        .message-preview {
+            font-size: 13px;
+            color: #605e5c;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .attachment-indicator {
+            display: inline-block;
+            margin-left: 8px;
+            color: #605e5c;
+        }
+
+        /* Reading Pane */
+        .reading-pane {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            background: white;
+        }
+
+        .message-actions {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #edebe9;
+        }
+
+        .action-btn {
+            padding: 6px 12px;
+            border: 1px solid #8a8886;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .action-btn:hover {
+            background: #f5f5f5;
+        }
+
+        .message-details {
+            margin-bottom: 24px;
+        }
+
+        .message-details h2 {
+            font-size: 20px;
+            color: #201f1e;
+            margin-bottom: 16px;
+        }
+
+        .detail-row {
+            display: flex;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .detail-label {
+            width: 80px;
+            color: #605e5c;
+        }
+
+        .detail-value {
+            flex: 1;
+            color: #201f1e;
+        }
+
+        .message-body {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #201f1e;
+        }
+
+        .message-body pre {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .attachments {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #edebe9;
+        }
+
+        .attachment-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .attachment-item:hover {
+            background: #edebe9;
+        }
+
+        /* Compose Modal - Outlook Style */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            width: 700px;
+            border-radius: 8px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #edebe9;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #faf9f8;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .modal-header h3 {
+            font-size: 16px;
+            color: #201f1e;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #605e5c;
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .modal-body input, .modal-body textarea {
+            width: 100%;
+            padding: 10px 12px;
+            margin-bottom: 16px;
+            border: 1px solid #8a8886;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .modal-body textarea {
+            height: 200px;
+            resize: vertical;
+        }
+
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid #edebe9;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #0078d4;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-message {
+            text-align: center;
+            color: #605e5c;
+            padding: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Navigation -->
+        <div class="nav-pane">
+            <div class="nav-item active" title="Mail" onclick="switchView('mail')">
+                <svg viewBox="0 0 24 24">
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4v-4l4-4 4 4 4-4 4 4v4z"/>
+                </svg>
+            </div>
+            <div class="nav-item" title="Calendar">
+                <svg viewBox="0 0 24 24">
+                    <path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/>
+                </svg>
+            </div>
+            <div class="nav-item" title="People">
+                <svg viewBox="0 0 24 24">
+                    <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-1 .05 1.16.84 2 1.87 2 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+                </svg>
+            </div>
+            <div class="nav-item" title="Files">
+                <svg viewBox="0 0 24 24">
+                    <path d="M6 2c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6H6zm7 7V3.5L18.5 9H13z"/>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Token Bar -->
+            <div class="token-bar">
+                <input type="text" class="token-input" id="tokenInput" placeholder="Paste your OAuth token here...">
+                <button class="btn btn-primary" onclick="connectWithToken()" id="connectBtn">Connect</button>
+                <div class="token-status" id="tokenStatus">🔌 Not connected</div>
+            </div>
+
+            <!-- Email Layout -->
+            <div class="email-layout">
+                <!-- Folder Pane -->
+                <div class="folder-pane">
+                    <div class="folder-header">FOLDERS</div>
+                    <div id="folderList">
+                        <!-- Folders will be populated here -->
+                        <div class="loading-message">Enter token to load folders</div>
+                    </div>
+                </div>
+
+                <!-- Message List -->
+                <div class="message-pane">
+                    <div class="message-list-header">
+                        <input type="text" class="search-box" id="searchInput" placeholder="Search" onkeyup="searchMessages()">
+                        <button class="filter-btn" onclick="toggleUnreadFilter()" id="filterBtn">📫 All</button>
+                    </div>
+                    <div class="message-list" id="messageList">
+                        <div class="loading-message">📧 Connect to see your emails</div>
+                    </div>
+                </div>
+
+                <!-- Reading Pane -->
+                <div class="reading-pane" id="readingPane">
+                    <div class="message-actions" id="messageActions" style="display: none;">
+                        <button class="action-btn" onclick="replyToMessage()">↩ Reply</button>
+                        <button class="action-btn" onclick="replyAll()">↩↪ Reply All</button>
+                        <button class="action-btn" onclick="forwardMessage()">↪ Forward</button>
+                        <button class="action-btn" onclick="deleteMessage()">🗑 Delete</button>
+                        <button class="action-btn" onclick="markAsJunk()">🚫 Junk</button>
+                        <button class="action-btn" onclick="moveToFolder()">📁 Move</button>
+                    </div>
+                    <div id="messageContent">
+                        <div class="loading-message">👈 Select a message to read</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Compose Modal -->
+    <div class="modal" id="composeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>New Message</h3>
+                <button class="close-btn" onclick="closeCompose()">×</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="composeTo" placeholder="To">
+                <input type="text" id="composeCc" placeholder="Cc">
+                <input type="text" id="composeBcc" placeholder="Bcc">
+                <input type="text" id="composeSubject" placeholder="Subject">
+                <textarea id="composeBody" placeholder="Message"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="saveDraft()">Save Draft</button>
+                <button class="btn btn-primary" onclick="sendEmail()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State management
+        let accessToken = '';
+        let currentFolder = 'inbox';
+        let currentMessageId = null;
+        let messages = [];
+        let folders = [];
+        let showOnlyUnread = false;
+        let userEmail = '';
+
+        // Connect with token
+        async function connectWithToken() {
+            accessToken = document.getElementById('tokenInput').value.trim();
+            if (!accessToken) {
+                updateStatus('Please enter a token', 'invalid');
+                return;
+            }
+
+            updateStatus('🔄 Connecting...', 'loading');
+            document.getElementById('connectBtn').disabled = true;
+
+            try {
+                // Validate token by getting user info
+                const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+
+                if (!userResponse.ok) {
+                    throw new Error('Invalid token');
+                }
+
+                const userData = await userResponse.json();
+                userEmail = userData.mail || userData.userPrincipalName;
+                
+                updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+                
+                // Save token for next time
+                localStorage.setItem('outlookToken', accessToken);
+                
+                // Load folders and messages
+                await loadFolders();
+                await loadFolder('inbox');
+                
+            } catch (error) {
+                updateStatus('❌ Invalid token', 'invalid');
+                console.error(error);
+            } finally {
+                document.getElementById('connectBtn').disabled = false;
+            }
+        }
+
+        // Load folders
+        async function loadFolders() {
+            const response = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            
+            const data = await response.json();
+            folders = data.value;
+            renderFolders();
+        }
+
+        // Render folders
+        function renderFolders() {
+            const folderList = document.getElementById('folderList');
+            
+            // Default folders first
+            const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk'];
+            
+            folderList.innerHTML = folders
+                .filter(f => defaultFolders.includes(f.displayName.toLowerCase()))
+                .concat(folders.filter(f => !defaultFolders.includes(f.displayName.toLowerCase())))
+                .map(folder => `
+                    <div class="folder-item ${folder.displayName.toLowerCase() === currentFolder ? 'active' : ''}" 
+                         onclick="loadFolder('${folder.id}')">
+                        <span class="folder-icon">${getFolderIcon(folder.displayName)}</span>
+                        <span class="folder-name">${folder.displayName}</span>
+                        <span class="folder-count">${folder.totalItemCount || 0}</span>
+                    </div>
+                `).join('');
+        }
+
+        // Get folder icon
+        function getFolderIcon(name) {
+            const icons = {
+                'inbox': '📥',
+                'sent': '📤',
+                'drafts': '📝',
+                'archive': '📦',
+                'junk': '⚠️',
+                'deleted': '🗑️'
+            };
+            return icons[name.toLowerCase()] || '📁';
+        }
+
+        // Load folder messages
+        async function loadFolder(folderId) {
+            currentFolder = folderId;
+            renderFolders();
+            
+            updateStatus(`🔄 Loading ${getFolderName(folderId)}...`, 'loading');
+            
+            try {
+                let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=50&$orderby=receivedDateTime DESC&$expand=attachments`;
+                
+                if (showOnlyUnread) {
+                    url += '&$filter=isRead eq false';
+                }
+                
+                const response = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                
+                const data = await response.json();
+                messages = data.value || [];
+                
+                renderMessageList();
+                updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+                
+                // Update folder counts
+                loadFolders();
+                
+            } catch (error) {
+                updateStatus('❌ Error loading messages', 'invalid');
+                console.error(error);
+            }
+        }
+
+        // Get folder display name
+        function getFolderName(folderId) {
+            const folder = folders.find(f => f.id === folderId);
+            return folder ? folder.displayName : 'folder';
+        }
+
+        // Render message list (Outlook style)
+        function renderMessageList() {
+            const messageList = document.getElementById('messageList');
+            
+            if (!messages.length) {
+                messageList.innerHTML = '<div class="loading-message">📭 No messages in this folder</div>';
+                return;
+            }
+            
+            messageList.innerHTML = messages.map(msg => `
+                <div class="message-item ${msg.isRead ? '' : 'unread'} ${msg.id === currentMessageId ? 'selected' : ''}" 
+                     onclick="loadMessage('${msg.id}')">
+                    <div class="message-sender">
+                        <span>${msg.from?.emailAddress?.name || 'Unknown'}</span>
+                        <span class="message-date">${formatDate(msg.receivedDateTime)}</span>
+                    </div>
+                    <div class="message-subject">
+                        ${msg.subject || '(No subject)'}
+                        ${msg.hasAttachments ? '<span class="attachment-indicator">📎</span>' : ''}
+                    </div>
+                    <div class="message-preview">${msg.bodyPreview || ''}</div>
+                </div>
+            `).join('');
+        }
+
+        // Format date
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const yesterday = new Date(now);
+            yesterday.setDate(yesterday.getDate() - 1);
+            
+            if (date.toDateString() === now.toDateString()) {
+                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else if (date.toDateString() === yesterday.toDateString()) {
+                return 'Yesterday';
+            } else {
+                return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            }
+        }
+
+        // Load single message
+        async function loadMessage(messageId) {
+            currentMessageId = messageId;
+            
+            try {
+                const response = await fetch(
+                    `https://graph.microsoft.com/v1.0/me/messages/${messageId}?$expand=attachments`,
+                    {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    }
+                );
+                
+                const msg = await response.json();
+                
+                // Mark as read
+                if (!msg.isRead) {
+                    await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ isRead: true })
+                    });
+                    
+                    // Update local message
+                    const index = messages.findIndex(m => m.id === messageId);
+                    if (index !== -1) {
+                        messages[index].isRead = true;
+                    }
+                }
+                
+                renderMessageList();
+                renderMessageContent(msg);
+                
+            } catch (error) {
+                console.error('Error loading message:', error);
+            }
+        }
+
+        // Render message content (Outlook style)
+        function renderMessageContent(msg) {
+            const actions = document.getElementById('messageActions');
+            actions.style.display = 'flex';
+            
+            const content = document.getElementById('messageContent');
+            content.innerHTML = `
+                <div class="message-details">
+                    <h2>${msg.subject || '(No subject)'}</h2>
+                    
+                    <div class="detail-row">
+                        <span class="detail-label">From:</span>
+                        <span class="detail-value">
+                            <strong>${msg.from?.emailAddress?.name || 'Unknown'}</strong> 
+                            &lt;${msg.from?.emailAddress?.address || ''}&gt;
+                        </span>
+                    </div>
+                    
+                    <div class="detail-row">
+                        <span class="detail-label">To:</span>
+                        <span class="detail-value">
+                            ${msg.toRecipients?.map(r => r.emailAddress.address).join('; ') || ''}
+                        </span>
+                    </div>
+                    
+                    ${msg.ccRecipients?.length ? `
+                        <div class="detail-row">
+                            <span class="detail-label">Cc:</span>
+                            <span class="detail-value">
+                                ${msg.ccRecipients.map(r => r.emailAddress.address).join('; ')}
+                            </span>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="detail-row">
+                        <span class="detail-label">Date:</span>
+                        <span class="detail-value">
+                            ${new Date(msg.receivedDateTime).toLocaleString()}
+                        </span>
+                    </div>
+                    
+                    <div class="message-body">
+                        ${msg.body?.contentType === 'html' ? msg.body.content : `<pre>${msg.body?.content || ''}</pre>`}
+                    </div>
+                    
+                    ${msg.hasAttachments ? `
+                        <div class="attachments">
+                            <strong>Attachments:</strong>
+                            <div style="margin-top: 12px;">
+                                ${msg.attachments?.map(att => `
+                                    <div class="attachment-item" onclick="downloadAttachment('${msg.id}', '${att.id}', '${att.name}')">
+                                        📎 ${att.name} (${Math.round(att.size/1024)} KB)
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // Search messages
+        async function searchMessages() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) {
+                loadFolder(currentFolder);
+                return;
+            }
+            
+            try {
+                const response = await fetch(
+                    `https://graph.microsoft.com/v1.0/me/mailFolders/${currentFolder}/messages?$search="${query}"&$top=50`,
+                    {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    }
+                );
+                
+                const data = await response.json();
+                messages = data.value || [];
+                renderMessageList();
+                
+            } catch (error) {
+                console.error('Search error:', error);
+            }
+        }
+
+        // Toggle unread filter
+        function toggleUnreadFilter() {
+            showOnlyUnread = !showOnlyUnread;
+            const filterBtn = document.getElementById('filterBtn');
+            filterBtn.textContent = showOnlyUnread ? '📫 Unread' : '📫 All';
+            loadFolder(currentFolder);
+        }
+
+        // Email actions
+        async function deleteMessage() {
+            if (!currentMessageId || !confirm('Delete this message?')) return;
+            
+            try {
+                await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                
+                // Move to trash or permanent delete
+                loadFolder(currentFolder);
+                document.getElementById('messageContent').innerHTML = '<div class="loading-message">Message deleted</div>';
+                document.getElementById('messageActions').style.display = 'none';
+                
+            } catch (error) {
+                alert('Error deleting message');
+            }
+        }
+
+        async function markAsJunk() {
+            if (!currentMessageId) return;
+            
+            try {
+                await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ moveToJunk: true })
+                });
+                
+                loadFolder('inbox');
+                alert('Message moved to junk');
+                
+            } catch (error) {
+                alert('Error marking as junk');
+            }
+        }
+
+        // Compose functions
+        function openCompose() {
+            document.getElementById('composeModal').classList.add('active');
+        }
+
+        function closeCompose() {
+            document.getElementById('composeModal').classList.remove('active');
+            clearCompose();
+        }
+
+        function clearCompose() {
+            ['to', 'cc', 'bcc', 'subject', 'body'].forEach(field => {
+                document.getElementById(`compose${field.charAt(0).toUpperCase() + field.slice(1)}`).value = '';
+            });
+        }
+
+        async function sendEmail() {
+            const to = document.getElementById('composeTo').value.split(',').map(e => e.trim());
+            const cc = document.getElementById('composeCc').value.split(',').map(e => e.trim()).filter(e => e);
+            const bcc = document.getElementById('composeBcc').value.split(',').map(e => e.trim()).filter(e => e);
+            
+            const message = {
+                subject: document.getElementById('composeSubject').value,
+                body: {
+                    contentType: 'HTML',
+                    content: document.getElementById('composeBody').value.replace(/\n/g, '<br>')
+                },
+                toRecipients: to.map(email => ({ emailAddress: { address: email } })),
+                ccRecipients: cc.map(email => ({ emailAddress: { address: email } })),
+                bccRecipients: bcc.map(email => ({ emailAddress: { address: email } }))
+            };
+            
+            try {
+                const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message, saveToSentItems: true })
+                });
+                
+                if (response.ok) {
+                    alert('Email sent successfully!');
+                    closeCompose();
+                    if (currentFolder === 'sent') loadFolder('sent');
+                }
+                
+            } catch (error) {
+                alert('Error sending email');
+            }
+        }
+
+        function replyToMessage() {
+            const msg = messages.find(m => m.id === currentMessageId);
+            if (!msg) return;
+            
+            openCompose();
+            document.getElementById('composeTo').value = msg.from?.emailAddress?.address || '';
+            document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
+        }
+
+        function replyAll() {
+            const msg = messages.find(m => m.id === currentMessageId);
+            if (!msg) return;
+            
+            openCompose();
+            const to = [msg.from?.emailAddress?.address];
+            const cc = msg.toRecipients?.map(r => r.emailAddress.address) || [];
+            
+            document.getElementById('composeTo').value = to.join(', ');
+            document.getElementById('composeCc').value = cc.join(', ');
+            document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
+        }
+
+        function forwardMessage() {
+            const msg = messages.find(m => m.id === currentMessageId);
+            if (!msg) return;
+            
+            openCompose();
+            document.getElementById('composeSubject').value = `Fwd: ${msg.subject || ''}`;
+            document.getElementById('composeBody').value = `\n\n-------- Forwarded Message --------\nFrom: ${msg.from?.emailAddress?.name}\nDate: ${new Date(msg.receivedDateTime).toLocaleString()}\nSubject: ${msg.subject}\n\n${msg.bodyPreview}`;
+        }
+
+        // Helper functions
+        function updateStatus(text, type) {
+            const status = document.getElementById('tokenStatus');
+            status.textContent = text;
+            status.className = `token-status status-${type}`;
+        }
+
+        function switchView(view) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+        }
+
+        // Load saved token on startup
+        window.onload = function() {
+            const savedToken = localStorage.getItem('outlookToken');
+            if (savedToken) {
+                document.getElementById('tokenInput').value = savedToken;
+                setTimeout(connectWithToken, 500);
+            }
+        };
+    </script>
+</body>
+</html>
