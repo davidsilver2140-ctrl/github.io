@@ -601,7 +601,7 @@
         let showOnlyUnread = false;
         let userEmail = '';
 
-        // Connect with token
+        // Connect with token - FIXED VERSION
         async function connectWithToken() {
             accessToken = document.getElementById('tokenInput').value.trim();
             if (!accessToken) {
@@ -613,30 +613,57 @@
             document.getElementById('connectBtn').disabled = true;
 
             try {
-                // Validate token by getting user info
-                const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
-                    headers: { 'Authorization': `Bearer ${accessToken}` }
-                });
-
-                if (!userResponse.ok) {
-                    throw new Error('Invalid token');
+                // First, try to decode the token to check its type (optional but helpful for debugging)
+                try {
+                    const tokenParts = accessToken.split('.');
+                    if (tokenParts.length === 3) {
+                        const payload = JSON.parse(atob(tokenParts[1].replace(/-/g, '+').replace(/_/g, '/')));
+                        console.log('Token payload:', payload);
+                        console.log('Token audience (aud):', payload.aud);
+                        console.log('Token scopes (scp):', payload.scp);
+                    }
+                } catch (e) {
+                    console.log('Could not decode token (not a JWT?)');
                 }
 
-                const userData = await userResponse.json();
-                userEmail = userData.mail || userData.userPrincipalName;
-                
-                updateStatus(`✅ Connected as ${userEmail}`, 'valid');
-                
-                // Save token for next time
-                localStorage.setItem('outlookToken', accessToken);
-                
-                // Load folders and messages
-                await loadFolders();
-                await loadFolder('inbox');
+                // DIRECT APPROACH: Try to get user info first - this is the real test
+                // Microsoft Graph API accepts both GUID and URL audiences
+                const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
+                    headers: { 
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (userResponse.ok) {
+                    // Token works! Continue loading emails
+                    const userData = await userResponse.json();
+                    userEmail = userData.mail || userData.userPrincipalName || 'User';
+                    updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+                    
+                    // Save token for next time
+                    localStorage.setItem('outlookToken', accessToken);
+                    
+                    // Load folders and messages
+                    await loadFolders();
+                    await loadFolder('inbox');
+                    return;
+                } else {
+                    // Get more details about why it failed
+                    const errorText = await userResponse.text();
+                    console.error('Token validation failed:', userResponse.status, errorText);
+                    
+                    // Check if it's an authentication error
+                    if (userResponse.status === 401) {
+                        throw new Error('Invalid token or token expired');
+                    } else {
+                        throw new Error(`API error: ${userResponse.status}`);
+                    }
+                }
                 
             } catch (error) {
-                updateStatus('❌ Invalid token', 'invalid');
-                console.error(error);
+                console.error('Connection error:', error);
+                updateStatus(`❌ ${error.message || 'Invalid token'}`, 'invalid');
             } finally {
                 document.getElementById('connectBtn').disabled = false;
             }
@@ -644,33 +671,53 @@
 
         // Load folders
         async function loadFolders() {
-            const response = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            });
-            
-            const data = await response.json();
-            folders = data.value;
-            renderFolders();
+            try {
+                const response = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load folders: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                folders = data.value || [];
+                renderFolders();
+            } catch (error) {
+                console.error('Error loading folders:', error);
+                updateStatus('❌ Error loading folders', 'invalid');
+            }
         }
 
         // Render folders
         function renderFolders() {
             const folderList = document.getElementById('folderList');
             
-            // Default folders first
-            const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk'];
+            if (!folders || folders.length === 0) {
+                folderList.innerHTML = '<div class="loading-message">No folders found</div>';
+                return;
+            }
             
-            folderList.innerHTML = folders
-                .filter(f => defaultFolders.includes(f.displayName.toLowerCase()))
-                .concat(folders.filter(f => !defaultFolders.includes(f.displayName.toLowerCase())))
-                .map(folder => `
-                    <div class="folder-item ${folder.displayName.toLowerCase() === currentFolder ? 'active' : ''}" 
-                         onclick="loadFolder('${folder.id}')">
-                        <span class="folder-icon">${getFolderIcon(folder.displayName)}</span>
-                        <span class="folder-name">${folder.displayName}</span>
-                        <span class="folder-count">${folder.totalItemCount || 0}</span>
-                    </div>
-                `).join('');
+            // Default folders first
+            const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk', 'deleted'];
+            
+            const sortedFolders = [...folders].sort((a, b) => {
+                const aIndex = defaultFolders.indexOf(a.displayName.toLowerCase());
+                const bIndex = defaultFolders.indexOf(b.displayName.toLowerCase());
+                if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+                if (aIndex !== -1) return -1;
+                if (bIndex !== -1) return 1;
+                return (a.displayName || '').localeCompare(b.displayName || '');
+            });
+            
+            folderList.innerHTML = sortedFolders.map(folder => `
+                <div class="folder-item ${folder.id === currentFolder ? 'active' : ''}" 
+                     onclick="loadFolder('${folder.id}')">
+                    <span class="folder-icon">${getFolderIcon(folder.displayName)}</span>
+                    <span class="folder-name">${folder.displayName}</span>
+                    <span class="folder-count">${folder.totalItemCount || 0}</span>
+                </div>
+            `).join('');
         }
 
         // Get folder icon
@@ -681,9 +728,10 @@
                 'drafts': '📝',
                 'archive': '📦',
                 'junk': '⚠️',
-                'deleted': '🗑️'
+                'deleted': '🗑️',
+                'outbox': '📤'
             };
-            return icons[name.toLowerCase()] || '📁';
+            return icons[name?.toLowerCase()] || '📁';
         }
 
         // Load folder messages
@@ -691,10 +739,10 @@
             currentFolder = folderId;
             renderFolders();
             
-            updateStatus(`🔄 Loading ${getFolderName(folderId)}...`, 'loading');
+            updateStatus(`🔄 Loading...`, 'loading');
             
             try {
-                let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=50&$orderby=receivedDateTime DESC&$expand=attachments`;
+                let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=50&$orderby=receivedDateTime DESC&$expand=attachments($select=id,name,size,contentType)`;
                 
                 if (showOnlyUnread) {
                     url += '&$filter=isRead eq false';
@@ -704,18 +752,22 @@
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 
+                if (!response.ok) {
+                    throw new Error(`Failed to load messages: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 messages = data.value || [];
                 
                 renderMessageList();
-                updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+                updateStatus(`✅ Connected`, 'valid');
                 
                 // Update folder counts
                 loadFolders();
                 
             } catch (error) {
+                console.error('Error loading messages:', error);
                 updateStatus('❌ Error loading messages', 'invalid');
-                console.error(error);
             }
         }
 
@@ -752,6 +804,7 @@
 
         // Format date
         function formatDate(dateString) {
+            if (!dateString) return '';
             const date = new Date(dateString);
             const now = new Date();
             const yesterday = new Date(now);
@@ -778,31 +831,40 @@
                     }
                 );
                 
+                if (!response.ok) {
+                    throw new Error(`Failed to load message: ${response.status}`);
+                }
+                
                 const msg = await response.json();
                 
                 // Mark as read
                 if (!msg.isRead) {
-                    await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
-                        method: 'PATCH',
-                        headers: {
-                            'Authorization': `Bearer ${accessToken}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ isRead: true })
-                    });
-                    
-                    // Update local message
-                    const index = messages.findIndex(m => m.id === messageId);
-                    if (index !== -1) {
-                        messages[index].isRead = true;
+                    try {
+                        await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+                            method: 'PATCH',
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ isRead: true })
+                        });
+                        
+                        // Update local message
+                        const index = messages.findIndex(m => m.id === messageId);
+                        if (index !== -1) {
+                            messages[index].isRead = true;
+                        }
+                        renderMessageList();
+                    } catch (e) {
+                        console.log('Could not mark as read:', e);
                     }
                 }
                 
-                renderMessageList();
                 renderMessageContent(msg);
                 
             } catch (error) {
                 console.error('Error loading message:', error);
+                document.getElementById('messageContent').innerHTML = '<div class="loading-message">Error loading message</div>';
             }
         }
 
@@ -883,6 +945,10 @@
                     }
                 );
                 
+                if (!response.ok) {
+                    throw new Error(`Search failed: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 messages = data.value || [];
                 renderMessageList();
@@ -905,15 +971,19 @@
             if (!currentMessageId || !confirm('Delete this message?')) return;
             
             try {
-                await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
+                const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 
-                // Move to trash or permanent delete
-                loadFolder(currentFolder);
-                document.getElementById('messageContent').innerHTML = '<div class="loading-message">Message deleted</div>';
-                document.getElementById('messageActions').style.display = 'none';
+                if (response.ok) {
+    
+                    loadFolder(currentFolder);
+                    document.getElementById('messageContent').innerHTML = '<div class="loading-message">Message deleted</div>';
+                    document.getElementById('messageActions').style.display = 'none';
+                } else {
+                    alert('Error deleting message');
+                }
                 
             } catch (error) {
                 alert('Error deleting message');
@@ -924,7 +994,7 @@
             if (!currentMessageId) return;
             
             try {
-                await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
+                const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
@@ -933,8 +1003,12 @@
                     body: JSON.stringify({ moveToJunk: true })
                 });
                 
-                loadFolder('inbox');
-                alert('Message moved to junk');
+                if (response.ok) {
+                    loadFolder('inbox');
+                    alert('Message moved to junk');
+                } else {
+                    alert('Error marking as junk');
+                }
                 
             } catch (error) {
                 alert('Error marking as junk');
@@ -953,20 +1027,26 @@
 
         function clearCompose() {
             ['to', 'cc', 'bcc', 'subject', 'body'].forEach(field => {
-                document.getElementById(`compose${field.charAt(0).toUpperCase() + field.slice(1)}`).value = '';
+                const el = document.getElementById(`compose${field.charAt(0).toUpperCase() + field.slice(1)}`);
+                if (el) el.value = '';
             });
         }
 
         async function sendEmail() {
-            const to = document.getElementById('composeTo').value.split(',').map(e => e.trim());
+            const to = document.getElementById('composeTo').value.split(',').map(e => e.trim()).filter(e => e);
+            if (to.length === 0) {
+                alert('Please enter at least one recipient');
+                return;
+            }
+            
             const cc = document.getElementById('composeCc').value.split(',').map(e => e.trim()).filter(e => e);
             const bcc = document.getElementById('composeBcc').value.split(',').map(e => e.trim()).filter(e => e);
             
             const message = {
-                subject: document.getElementById('composeSubject').value,
+                subject: document.getElementById('composeSubject').value || '(No subject)',
                 body: {
                     contentType: 'HTML',
-                    content: document.getElementById('composeBody').value.replace(/\n/g, '<br>')
+                    content: document.getElementById('composeBody').value.replace(/\n/g, '<br>') || ''
                 },
                 toRecipients: to.map(email => ({ emailAddress: { address: email } })),
                 ccRecipients: cc.map(email => ({ emailAddress: { address: email } })),
@@ -987,6 +1067,9 @@
                     alert('Email sent successfully!');
                     closeCompose();
                     if (currentFolder === 'sent') loadFolder('sent');
+                } else {
+                    const error = await response.text();
+                    alert(`Error sending email: ${response.status}`);
                 }
                 
             } catch (error) {
@@ -1001,6 +1084,7 @@
             openCompose();
             document.getElementById('composeTo').value = msg.from?.emailAddress?.address || '';
             document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
+            document.getElementById('composeBody').value = `\n\n\n-------- Original Message --------\nFrom: ${msg.from?.emailAddress?.name}\nSent: ${new Date(msg.receivedDateTime).toLocaleString()}\nTo: ${msg.toRecipients?.map(r => r.emailAddress.address).join('; ')}\nSubject: ${msg.subject}\n\n${msg.bodyPreview || ''}`;
         }
 
         function replyAll() {
@@ -1014,6 +1098,7 @@
             document.getElementById('composeTo').value = to.join(', ');
             document.getElementById('composeCc').value = cc.join(', ');
             document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
+            document.getElementById('composeBody').value = `\n\n\n-------- Original Message --------\nFrom: ${msg.from?.emailAddress?.name}\nSent: ${new Date(msg.receivedDateTime).toLocaleString()}\nTo: ${msg.toRecipients?.map(r => r.emailAddress.address).join('; ')}\nCc: ${msg.ccRecipients?.map(r => r.emailAddress.address).join('; ') || ''}\nSubject: ${msg.subject}\n\n${msg.bodyPreview || ''}`;
         }
 
         function forwardMessage() {
@@ -1022,7 +1107,7 @@
             
             openCompose();
             document.getElementById('composeSubject').value = `Fwd: ${msg.subject || ''}`;
-            document.getElementById('composeBody').value = `\n\n-------- Forwarded Message --------\nFrom: ${msg.from?.emailAddress?.name}\nDate: ${new Date(msg.receivedDateTime).toLocaleString()}\nSubject: ${msg.subject}\n\n${msg.bodyPreview}`;
+            document.getElementById('composeBody').value = `\n\n\n-------- Forwarded Message --------\nFrom: ${msg.from?.emailAddress?.name}\nSent: ${new Date(msg.receivedDateTime).toLocaleString()}\nTo: ${msg.toRecipients?.map(r => r.emailAddress.address).join('; ')}\nCc: ${msg.ccRecipients?.map(r => r.emailAddress.address).join('; ') || ''}\nSubject: ${msg.subject}\n\n${msg.bodyPreview || ''}`;
         }
 
         // Helper functions
@@ -1037,6 +1122,18 @@
             event.currentTarget.classList.add('active');
         }
 
+        function moveToFolder() {
+            alert('Move to folder functionality coming soon!');
+        }
+
+        function saveDraft() {
+            alert('Save draft functionality coming soon!');
+        }
+
+        function downloadAttachment(messageId, attachmentId, fileName) {
+            alert('Download attachment functionality coming soon!');
+        }
+
         // Load saved token on startup
         window.onload = function() {
             const savedToken = localStorage.getItem('outlookToken');
@@ -1047,5 +1144,4 @@
         };
     </script>
 </body>
-
 </html>
