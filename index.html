@@ -865,11 +865,6 @@
     let attachments = [];
     let drafts = JSON.parse(localStorage.getItem('emailDrafts') || '[]');
 
-    // IMPORTANT CHANGE:
-    // We no longer use localStorage for rules display/toggle/delete.
-    // Rules are loaded from Outlook server-side.
-    // let rules = JSON.parse(localStorage.getItem('emailRules') || '[]');
-
     // Rule builder state
     let selectedCondition = '';
     let selectedAction = '';
@@ -894,6 +889,19 @@
         console.log('Could not decode token');
       }
       return null;
+    }
+
+    // ✅ ADDED (Step 1): scope check helper
+    function tokenHasScope(requiredScope) {
+      const payload = decodeToken(accessToken);
+      const scopes = (payload?.scp || '').split(' ').filter(Boolean);
+      return scopes.includes(requiredScope);
+    }
+
+    // ✅ ADDED: quick helper to show current scopes (optional, but helpful)
+    function getTokenScopes() {
+      const payload = decodeToken(accessToken);
+      return (payload?.scp || '').split(' ').filter(Boolean);
     }
 
     function checkTokenExpiry() {
@@ -960,7 +968,13 @@
         const userData = await userResponse.json();
         userEmail = userData.mail || userData.userPrincipalName;
 
-        updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+        // ✅ ADDED: show a warning if rules scope missing (non-blocking)
+        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+          updateStatus(`✅ Connected as ${userEmail} (⚠️ Rules disabled)`, 'warning');
+          console.warn('Missing scope MailboxSettings.ReadWrite. Current scopes:', getTokenScopes());
+        } else {
+          updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+        }
 
         localStorage.setItem('accessToken', accessToken);
         checkTokenExpiry();
@@ -1048,7 +1062,6 @@
 
         if (createResponse.ok) {
           const newFolder = await createResponse.json();
-          // refresh folders list after creating
           await loadFolders();
           return newFolder.id;
         }
@@ -1118,7 +1131,13 @@
         }
 
         renderMessageList();
-        updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+
+        // keep the connected status consistent with rules scope
+        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+          updateStatus(`✅ Connected as ${userEmail} (⚠️ Rules disabled)`, 'warning');
+        } else {
+          updateStatus(`✅ Connected as ${userEmail}`, 'valid');
+        }
 
         await delay(500);
         loadFolders();
@@ -1454,6 +1473,24 @@
         return;
       }
 
+      // ✅ ADDED (Step 2): block loading rules if permission missing
+      if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+        const scopes = getTokenScopes().join(' ');
+        document.getElementById('rulesList').innerHTML = `
+          <div class="loading-message">
+            ❌ Your token can't manage Inbox Rules.<br><br>
+            Missing scope: <b>MailboxSettings.ReadWrite</b><br><br>
+            Current scopes (scp):<br>
+            <div style="margin-top:10px; font-family:Consolas,monospace; font-size:12px; background:#fff; padding:10px; border:1px solid #edebe9; border-radius:6px; max-height:140px; overflow:auto;">
+              ${escapeHtml(scopes || '(none)')}
+            </div>
+            <div style="margin-top:12px;">
+              Get a new token that includes <b>MailboxSettings.ReadWrite</b>, then reconnect.
+            </div>
+          </div>`;
+        return;
+      }
+
       await renderServerRulesList();
     }
 
@@ -1531,7 +1568,6 @@
     }
 
     // -------- Server rules API helpers --------
-
     async function fetchServerRules() {
       const inboxId = await getInboxIdCached();
       const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`, {
@@ -1586,6 +1622,12 @@
 
     async function toggleServerRule(ruleId, currentlyEnabled) {
       try {
+        // ✅ ADDED: protect toggle too
+        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+          alert("❌ Missing scope: MailboxSettings.ReadWrite.\nCan't enable/disable rules with this token.");
+          return;
+        }
+
         const inboxId = await getInboxIdCached();
 
         const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
@@ -1610,6 +1652,12 @@
       if (!confirm('Delete this rule from Outlook (server)?')) return;
 
       try {
+        // ✅ ADDED: protect delete too
+        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+          alert("❌ Missing scope: MailboxSettings.ReadWrite.\nCan't delete rules with this token.");
+          return;
+        }
+
         const inboxId = await getInboxIdCached();
 
         const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
@@ -1629,7 +1677,7 @@
       }
     }
 
-    // -------- Create server-side rule (UPDATED payload) --------
+    // -------- Create server-side rule --------
     async function createServerSideRule(rule) {
       const inboxId = await getInboxIdCached();
 
@@ -1731,7 +1779,7 @@
         }
       }
 
-      // IMPORTANT: stopProcessingRules belongs inside actions
+      // stopProcessingRules belongs inside actions
       actions.stopProcessingRules = !!rule.stopProcessing;
 
       // Sequence: append after existing
@@ -1765,6 +1813,18 @@
     }
 
     async function saveRule() {
+      // ✅ ADDED (Step 3): hard block rule saving without proper scope
+      if (!tokenHasScope('MailboxSettings.ReadWrite')) {
+        const scopes = getTokenScopes().join(' ');
+        alert(
+          "❌ Your token can't manage Inbox Rules.\n\n" +
+          "Missing scope: MailboxSettings.ReadWrite\n\n" +
+          "Current scopes (scp):\n" + (scopes || '(none)') + "\n\n" +
+          "Re-authenticate and request MailboxSettings.ReadWrite, then try again."
+        );
+        return;
+      }
+
       const ruleName = document.getElementById('ruleName').value.trim();
       if (!ruleName) { alert('Please enter a rule name'); return; }
 
