@@ -71,37 +71,31 @@
             background: #faf9f8;
         }
 
-        /* Token Bar - Updated for two tokens */
+        /* Token Bar - Simplified */
         .token-bar {
             background: white;
             padding: 12px 24px;
             border-bottom: 1px solid #edebe9;
             display: flex;
-            flex-direction: column;
-            gap: 8px;
+            align-items: center;
+            gap: 16px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.02);
         }
 
-        .token-row {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
         .token-label {
-            width: 100px;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             color: #323130;
+            white-space: nowrap;
         }
 
         .token-input {
             flex: 1;
-            padding: 8px 12px;
+            padding: 10px 12px;
             border: 1px solid #8a8886;
             border-radius: 4px;
             font-family: 'Consolas', monospace;
-            font-size: 13px;
+            font-size: 14px;
             background: #faf9f8;
         }
 
@@ -111,17 +105,11 @@
             box-shadow: 0 0 0 2px rgba(0,120,212,0.3);
         }
 
-        .token-input:disabled {
-            background: #f0f0f0;
-            color: #666;
-        }
-
         .token-status {
             padding: 6px 12px;
             border-radius: 16px;
             font-size: 13px;
             font-weight: 500;
-            margin-left: auto;
         }
 
         .status-loading {
@@ -163,27 +151,10 @@
             cursor: not-allowed;
         }
 
-        .btn-secondary {
-            background: #8B5CF6;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background: #7C3AED;
-        }
-
         .action-buttons {
             display: flex;
             gap: 8px;
             align-items: center;
-        }
-
-        .refresh-indicator {
-            font-size: 11px;
-            color: #0b5a0b;
-            background: #dff6dd;
-            padding: 4px 8px;
-            border-radius: 12px;
         }
 
         /* Email Layout - Outlook Style */
@@ -686,23 +657,15 @@
 
         <!-- Main Content -->
         <div class="main-content">
-            <!-- Token Bar - Two rows for tokens -->
+            <!-- Token Bar - Simplified with only access token -->
             <div class="token-bar">
-                <div class="token-row">
-                    <span class="token-label">Access Token:</span>
-                    <input type="text" class="token-input" id="accessTokenInput" placeholder="Paste access token here..." disabled>
-                    <div class="token-status" id="tokenStatus">🔌 Not connected</div>
+                <span class="token-label">Access Token:</span>
+                <input type="text" class="token-input" id="accessTokenInput" placeholder="Paste your access token here...">
+                <div class="action-buttons">
+                    <button class="btn btn-primary" onclick="connectWithToken()" id="connectBtn">Connect</button>
+                    <button class="btn btn-primary" onclick="openCompose()" id="composeBtn" style="background: #8B5CF6;">✏️ Compose</button>
                 </div>
-                <div class="token-row">
-                    <span class="token-label">Refresh Token:</span>
-                    <input type="text" class="token-input" id="refreshTokenInput" placeholder="Paste refresh token here...">
-                    <div class="action-buttons">
-                        <button class="btn btn-primary" onclick="connectWithTokens()" id="connectBtn">Connect</button>
-                        <button class="btn btn-secondary" onclick="refreshAccessToken()" id="refreshBtn">🔄 Refresh</button>
-                        <button class="btn btn-primary" onclick="openCompose()" id="composeBtn" style="background: #8B5CF6;">✏️ Compose</button>
-                    </div>
-                </div>
-                <div id="refreshInfo" class="refresh-indicator" style="display: none;"></div>
+                <div class="token-status" id="tokenStatus">🔌 Not connected</div>
             </div>
 
             <!-- Email Layout -->
@@ -782,10 +745,8 @@
     </div>
 
     <script>
-        // State management
+        // State management - removed refreshToken
         let accessToken = '';
-        let refreshToken = '';
-        let tokenExpiry = null;
         let currentFolder = 'inbox';
         let currentMessageId = null;
         let messages = [];
@@ -802,102 +763,28 @@
         }
 
         // ============================================
-        // FIXED: Exchange refresh token for access token
+        // Simplified connect with token only
         // ============================================
-        async function exchangeRefreshToken(refreshTokenValue) {
-            try {
-                const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: new URLSearchParams({
-                        grant_type: 'refresh_token',
-                        refresh_token: refreshTokenValue,
-                        client_id: 'd3590ed6-52b3-4102-aeff-aad2292ab01c', // Microsoft Office client ID
-                        scope: 'https://graph.microsoft.com/.default offline_access'
-                    })
-                });
-
-                if (!response.ok) {
-                    const error = await response.text();
-                    console.error('Token exchange failed:', error);
-                    return null;
-                }
-
-                return await response.json();
-                
-            } catch (error) {
-                console.error('Exchange failed:', error);
-                return null;
-            }
-        }
-
-        // ============================================
-        // FIXED: Connect with tokens - NOW WORKS WITH JUST REFRESH TOKEN
-        // ============================================
-        async function connectWithTokens() {
-            const accessInput = document.getElementById('accessTokenInput').value.trim();
-            const refreshInput = document.getElementById('refreshTokenInput').value.trim();
+        async function connectWithToken() {
+            const tokenInput = document.getElementById('accessTokenInput').value.trim();
             
-            if (!accessInput && !refreshInput) {
-                updateStatus('Please enter at least one token', 'invalid');
+            if (!tokenInput) {
+                updateStatus('Please enter a token', 'invalid');
                 return;
             }
 
+            accessToken = tokenInput;
             updateStatus('🔄 Connecting...', 'loading');
             document.getElementById('connectBtn').disabled = true;
 
             try {
-                // If we have refresh token but no access token, exchange it
-                if (refreshInput && !accessInput) {
-                    updateStatus('🔄 Exchanging refresh token...', 'loading');
-                    
-                    const tokenData = await exchangeRefreshToken(refreshInput);
-                    
-                    if (tokenData && tokenData.access_token) {
-                        accessToken = tokenData.access_token;
-                        // Update refresh token if a new one was provided
-                        if (tokenData.refresh_token) {
-                            refreshToken = tokenData.refresh_token;
-                        } else {
-                            refreshToken = refreshInput;
-                        }
-                        
-                        // Update input fields
-                        document.getElementById('accessTokenInput').value = accessToken;
-                        document.getElementById('refreshTokenInput').value = refreshToken;
-                    } else {
-                        throw new Error('Failed to exchange refresh token');
-                    }
-                } else {
-                    // Use provided tokens
-                    accessToken = accessInput || accessToken;
-                    refreshToken = refreshInput || refreshToken;
-                }
-
-                // Validate the access token
+                // Validate token by getting user info
                 const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
 
                 if (userResponse.status === 401) {
-                    // Token expired - try to refresh if we have refresh token
-                    if (refreshToken) {
-                        updateStatus('🔄 Token expired, refreshing...', 'loading');
-                        const tokenData = await exchangeRefreshToken(refreshToken);
-                        if (tokenData && tokenData.access_token) {
-                            accessToken = tokenData.access_token;
-                            document.getElementById('accessTokenInput').value = accessToken;
-                            if (tokenData.refresh_token) {
-                                refreshToken = tokenData.refresh_token;
-                                document.getElementById('refreshTokenInput').value = refreshToken;
-                            }
-                            // Retry validation
-                            return connectWithTokens();
-                        }
-                    }
-                    throw new Error('Token expired and no valid refresh token');
+                    throw new Error('Token expired or invalid');
                 }
 
                 if (!userResponse.ok) {
@@ -909,16 +796,8 @@
                 
                 updateStatus(`✅ Connected as ${userEmail}`, 'valid');
                 
-                // Save tokens
+                // Save token for next time
                 localStorage.setItem('accessToken', accessToken);
-                if (refreshToken) {
-                    localStorage.setItem('refreshToken', refreshToken);
-                    document.getElementById('refreshInfo').style.display = 'block';
-                    document.getElementById('refreshInfo').textContent = '✓ Auto-refresh enabled';
-                }
-                
-                // Enable access token input
-                document.getElementById('accessTokenInput').disabled = false;
                 
                 await loadFolders();
                 await delay(500);
@@ -929,83 +808,6 @@
                 console.error(error);
             } finally {
                 document.getElementById('connectBtn').disabled = false;
-            }
-        }
-
-        // ============================================
-        // Refresh Token Function - FIXED
-        // ============================================
-        async function refreshAccessToken() {
-            if (!refreshToken) {
-                updateStatus('❌ No refresh token', 'invalid');
-                return null;
-            }
-
-            try {
-                updateStatus('🔄 Refreshing token...', 'loading');
-                
-                const tokenData = await exchangeRefreshToken(refreshToken);
-                
-                if (tokenData && tokenData.access_token) {
-                    accessToken = tokenData.access_token;
-                    if (tokenData.refresh_token) {
-                        refreshToken = tokenData.refresh_token;
-                        localStorage.setItem('refreshToken', refreshToken);
-                    }
-                    
-                    // Update input fields
-                    document.getElementById('accessTokenInput').value = accessToken;
-                    document.getElementById('refreshTokenInput').value = refreshToken;
-                    
-                    updateStatus('✅ Token refreshed', 'valid');
-                    return accessToken;
-                } else {
-                    updateStatus('❌ Refresh failed', 'invalid');
-                    return null;
-                }
-                
-            } catch (error) {
-                console.error('Refresh failed:', error);
-                updateStatus('❌ Refresh failed', 'invalid');
-                return null;
-            }
-        }
-
-        // ============================================
-        // API helper with automatic refresh
-        // ============================================
-        async function callGraphApi(url, options = {}, retryCount = 0) {
-            if (!accessToken) {
-                throw new Error('No access token');
-            }
-
-            const headers = {
-                'Authorization': `Bearer ${accessToken}`,
-                ...options.headers
-            };
-
-            try {
-                const response = await fetch(url, { ...options, headers });
-
-                if (response.status === 401 && retryCount < 1 && refreshToken) {
-                    console.log('Token expired, refreshing...');
-                    
-                    const newToken = await refreshAccessToken();
-                    
-                    if (newToken) {
-                        options.headers = {
-                            ...options.headers,
-                            'Authorization': `Bearer ${newToken}`
-                        };
-                        return callGraphApi(url, options, retryCount + 1);
-                    }
-                }
-
-                return response;
-                
-            } catch (error) {
-                console.error('API call failed:', error);
-                throw error;
             }
         }
 
@@ -1035,11 +837,8 @@
                 return loadFolders();
             }
             
-            if (response.status === 401 && refreshToken) {
-                const newToken = await refreshAccessToken();
-                if (newToken) {
-                    return loadFolders();
-                }
+            if (!response.ok) {
+                updateStatus('❌ Error loading folders', 'invalid');
                 return;
             }
             
@@ -1104,12 +903,8 @@
                     return loadFolder(folderId);
                 }
                 
-                if (response.status === 401 && refreshToken) {
-                    const newToken = await refreshAccessToken();
-                    if (newToken) {
-                        return loadFolder(folderId);
-                    }
-                    return;
+                if (!response.ok) {
+                    throw new Error('Failed to load messages');
                 }
                 
                 const data = await response.json();
@@ -1215,16 +1010,13 @@
                     return loadMessage(messageId);
                 }
                 
-                if (response.status === 401 && refreshToken) {
-                    const newToken = await refreshAccessToken();
-                    if (newToken) {
-                        return loadMessage(messageId);
-                    }
-                    return;
+                if (!response.ok) {
+                    throw new Error('Failed to load message');
                 }
                 
                 const msg = await response.json();
                 
+                // Mark as read
                 if (!msg.isRead) {
                     await delay(300);
                     await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
@@ -1418,12 +1210,8 @@
                         return searchMessages();
                     }
                     
-                    if (response.status === 401 && refreshToken) {
-                        const newToken = await refreshAccessToken();
-                        if (newToken) {
-                            return searchMessages();
-                        }
-                        return;
+                    if (!response.ok) {
+                        throw new Error('Search failed');
                     }
                     
                     const data = await response.json();
@@ -1454,12 +1242,8 @@
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 
-                if (response.status === 401 && refreshToken) {
-                    const newToken = await refreshAccessToken();
-                    if (newToken) {
-                        return deleteMessage();
-                    }
-                    return;
+                if (!response.ok && response.status !== 204) {
+                    throw new Error('Delete failed');
                 }
                 
                 await delay(500);
@@ -1485,12 +1269,8 @@
                     body: JSON.stringify({ moveToJunk: true })
                 });
                 
-                if (response.status === 401 && refreshToken) {
-                    const newToken = await refreshAccessToken();
-                    if (newToken) {
-                        return markAsJunk();
-                    }
-                    return;
+                if (!response.ok) {
+                    throw new Error('Failed to mark as junk');
                 }
                 
                 await delay(500);
@@ -1502,7 +1282,7 @@
             }
         }
 
-        // Compose functions
+        // Compose functions (unchanged)
         function openCompose() {
             document.getElementById('composeModal').classList.add('active');
             attachments = [];
@@ -1599,14 +1379,6 @@
                 if (response.status === 429) {
                     const retryAfter = response.headers.get('Retry-After') || 10;
                     alert(`Rate limited. Please wait ${retryAfter} seconds.`);
-                    return;
-                }
-                
-                if (response.status === 401 && refreshToken) {
-                    const newToken = await refreshAccessToken();
-                    if (newToken) {
-                        return sendEmail();
-                    }
                     return;
                 }
                 
@@ -1828,22 +1600,11 @@
         // Load saved token on startup
         window.onload = function() {
             const savedAccess = localStorage.getItem('accessToken');
-            const savedRefresh = localStorage.getItem('refreshToken');
             
             if (savedAccess) {
                 document.getElementById('accessTokenInput').value = savedAccess;
                 accessToken = savedAccess;
-            }
-            
-            if (savedRefresh) {
-                document.getElementById('refreshTokenInput').value = savedRefresh;
-                refreshToken = savedRefresh;
-                document.getElementById('refreshInfo').style.display = 'block';
-                document.getElementById('refreshInfo').textContent = '✓ Auto-refresh ready';
-            }
-            
-            if (savedAccess || savedRefresh) {
-                setTimeout(connectWithTokens, 500);
+                setTimeout(connectWithToken, 500);
             }
         };
     </script>
