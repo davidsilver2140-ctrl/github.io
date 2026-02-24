@@ -802,7 +802,39 @@
         }
 
         // ============================================
-        // Connect with both tokens
+        // FIXED: Exchange refresh token for access token
+        // ============================================
+        async function exchangeRefreshToken(refreshTokenValue) {
+            try {
+                const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        grant_type: 'refresh_token',
+                        refresh_token: refreshTokenValue,
+                        client_id: 'd3590ed6-52b3-4102-aeff-aad2292ab01c', // Microsoft Office client ID
+                        scope: 'https://graph.microsoft.com/.default offline_access'
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    console.error('Token exchange failed:', error);
+                    return null;
+                }
+
+                return await response.json();
+                
+            } catch (error) {
+                console.error('Exchange failed:', error);
+                return null;
+            }
+        }
+
+        // ============================================
+        // FIXED: Connect with tokens - NOW WORKS WITH JUST REFRESH TOKEN
         // ============================================
         async function connectWithTokens() {
             const accessInput = document.getElementById('accessTokenInput').value.trim();
@@ -817,41 +849,51 @@
             document.getElementById('connectBtn').disabled = true;
 
             try {
-                // Try to use access token first if provided
-                if (accessInput) {
-                    accessToken = accessInput;
-                }
-                
-                if (refreshInput) {
-                    refreshToken = refreshInput;
+                // If we have refresh token but no access token, exchange it
+                if (refreshInput && !accessInput) {
+                    updateStatus('🔄 Exchanging refresh token...', 'loading');
                     
-                    // If we have refresh token but no access token, try to refresh
-                    if (!accessToken && refreshToken) {
-                        updateStatus('🔄 Getting new token...', 'loading');
-                        const newToken = await refreshAccessToken(refreshToken);
-                        if (newToken) {
-                            accessToken = newToken;
-                            document.getElementById('accessTokenInput').value = newToken;
+                    const tokenData = await exchangeRefreshToken(refreshInput);
+                    
+                    if (tokenData && tokenData.access_token) {
+                        accessToken = tokenData.access_token;
+                        // Update refresh token if a new one was provided
+                        if (tokenData.refresh_token) {
+                            refreshToken = tokenData.refresh_token;
                         } else {
-                            throw new Error('Failed to refresh token');
+                            refreshToken = refreshInput;
                         }
+                        
+                        // Update input fields
+                        document.getElementById('accessTokenInput').value = accessToken;
+                        document.getElementById('refreshTokenInput').value = refreshToken;
+                    } else {
+                        throw new Error('Failed to exchange refresh token');
                     }
+                } else {
+                    // Use provided tokens
+                    accessToken = accessInput || accessToken;
+                    refreshToken = refreshInput || refreshToken;
                 }
 
-                // Validate token by getting user info
+                // Validate the access token
                 const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
 
                 if (userResponse.status === 401) {
-                    // Token expired - try to refresh
+                    // Token expired - try to refresh if we have refresh token
                     if (refreshToken) {
                         updateStatus('🔄 Token expired, refreshing...', 'loading');
-                        const newToken = await refreshAccessToken(refreshToken);
-                        if (newToken) {
-                            accessToken = newToken;
-                            document.getElementById('accessTokenInput').value = newToken;
-                            // Retry with new token
+                        const tokenData = await exchangeRefreshToken(refreshToken);
+                        if (tokenData && tokenData.access_token) {
+                            accessToken = tokenData.access_token;
+                            document.getElementById('accessTokenInput').value = accessToken;
+                            if (tokenData.refresh_token) {
+                                refreshToken = tokenData.refresh_token;
+                                document.getElementById('refreshTokenInput').value = refreshToken;
+                            }
+                            // Retry validation
                             return connectWithTokens();
                         }
                     }
@@ -875,9 +917,8 @@
                     document.getElementById('refreshInfo').textContent = '✓ Auto-refresh enabled';
                 }
                 
-                // Enable access token input and show the token
+                // Enable access token input
                 document.getElementById('accessTokenInput').disabled = false;
-                document.getElementById('accessTokenInput').value = accessToken;
                 
                 await loadFolders();
                 await delay(500);
@@ -892,12 +933,10 @@
         }
 
         // ============================================
-        // Refresh Token Function
+        // Refresh Token Function - FIXED
         // ============================================
-        async function refreshAccessToken(refreshTokenValue = null) {
-            const tokenToUse = refreshTokenValue || refreshToken;
-            
-            if (!tokenToUse) {
+        async function refreshAccessToken() {
+            if (!refreshToken) {
                 updateStatus('❌ No refresh token', 'invalid');
                 return null;
             }
@@ -905,53 +944,25 @@
             try {
                 updateStatus('🔄 Refreshing token...', 'loading');
                 
-                // Parse the JWT to get tenant ID
-                let tenantId = 'common';
-                try {
-                    const parts = accessToken.split('.');
-                    if (parts.length === 3) {
-                        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-                        if (payload.tid) tenantId = payload.tid;
+                const tokenData = await exchangeRefreshToken(refreshToken);
+                
+                if (tokenData && tokenData.access_token) {
+                    accessToken = tokenData.access_token;
+                    if (tokenData.refresh_token) {
+                        refreshToken = tokenData.refresh_token;
+                        localStorage.setItem('refreshToken', refreshToken);
                     }
-                } catch (e) {}
-
-                // Token refresh request
-                const refreshResponse = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: new URLSearchParams({
-                        grant_type: 'refresh_token',
-                        refresh_token: tokenToUse,
-                        client_id: 'd3590ed6-52b3-4102-aeff-aad2292ab01c', // Microsoft Office client ID
-                        scope: 'https://graph.microsoft.com/.default offline_access'
-                    })
-                });
-
-                if (!refreshResponse.ok) {
-                    const error = await refreshResponse.text();
-                    console.error('Refresh failed:', error);
+                    
+                    // Update input fields
+                    document.getElementById('accessTokenInput').value = accessToken;
+                    document.getElementById('refreshTokenInput').value = refreshToken;
+                    
+                    updateStatus('✅ Token refreshed', 'valid');
+                    return accessToken;
+                } else {
                     updateStatus('❌ Refresh failed', 'invalid');
                     return null;
                 }
-
-                const tokenData = await refreshResponse.json();
-                
-                // Update tokens
-                accessToken = tokenData.access_token;
-                if (tokenData.refresh_token) {
-                    refreshToken = tokenData.refresh_token;
-                    localStorage.setItem('refreshToken', refreshToken);
-                }
-                
-                // Update input fields
-                document.getElementById('accessTokenInput').value = accessToken;
-                document.getElementById('refreshTokenInput').value = refreshToken;
-                
-                updateStatus('✅ Token refreshed', 'valid');
-                
-                return accessToken;
                 
             } catch (error) {
                 console.error('Refresh failed:', error);
