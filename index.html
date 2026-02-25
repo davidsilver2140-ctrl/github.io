@@ -634,10 +634,9 @@
             <button class="action-btn" onclick="forwardMessage()">↪ Forward</button>
             <button class="action-btn" onclick="deleteMessage()">🗑 Delete</button>
 
-            <!-- UPDATED: split "junk" actions -->
-            <button class="action-btn" onclick="moveToJunk()">🚫 Move to Junk</button>
-            <button class="action-btn" onclick="reportAsJunk()">🛡 Report Junk</button>
-            <button class="action-btn" onclick="reportAsPhishing()">🎣 Report Phishing</button>
+            <!-- UPDATED: Junk/Phishing actions -->
+            <button class="action-btn" onclick="reportJunk()">🚫 Report Junk</button>
+            <button class="action-btn" onclick="reportPhishing()">🎣 Report Phishing</button>
 
             <button class="action-btn" onclick="moveToFolder()">📁 Move</button>
           </div>
@@ -745,10 +744,7 @@
                   </optgroup>
                   <optgroup label="Mark message">
                     <option value="markRead">Mark as read</option>
-
-                    <!-- UPDATED LABEL -->
-                    <option value="markJunk">Move/Report as Junk</option>
-
+                    <option value="markJunk">Move to Junk Email</option>
                     <option value="importance">Mark with importance</option>
                     <option value="categorize">Categorize</option>
                   </optgroup>
@@ -823,10 +819,7 @@
             </optgroup>
             <optgroup label="Mark message">
               <option value="markRead">Mark as read</option>
-
-              <!-- UPDATED LABEL -->
-              <option value="markJunk">Move/Report as Junk</option>
-
+              <option value="markJunk">Move to Junk Email</option>
               <option value="importance">Mark with importance</option>
               <option value="categorize">Categorize</option>
             </optgroup>
@@ -866,7 +859,6 @@
     // STATE MANAGEMENT
     // ============================================
     let accessToken = '';
-    let tokenExpiry = null;
     let currentFolder = 'inbox';
     let currentMessageId = null;
     let messages = [];
@@ -881,8 +873,15 @@
     let selectedAction = '';
     let additionalActions = [];
 
-    // Cache inbox id to avoid repeated calls
+    // Cache well-known folder ids
     let inboxFolderIdCache = null;
+    let junkFolderIdCache = null;
+
+    // Optional: if you want “Report” to also email your security team, set these:
+    // const REPORT_JUNK_TO = "security@yourcompany.com";
+    // const REPORT_PHISHING_TO = "phishing@yourcompany.com";
+    const REPORT_JUNK_TO = "";
+    const REPORT_PHISHING_TO = "";
 
     // ============================================
     // HELPER FUNCTIONS
@@ -896,9 +895,7 @@
           const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
           return payload;
         }
-      } catch (e) {
-        console.log('Could not decode token');
-      }
+      } catch (e) {}
       return null;
     }
 
@@ -940,15 +937,23 @@
         .replace(/'/g, '&#039;');
     }
 
-    // ArrayBuffer -> base64 (for optional phishing submission)
-    function arrayBufferToBase64(buffer) {
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    async function graphFetch(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After') || 10;
+        updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
+        await delay(Number(retryAfter) * 1000);
+        return graphFetch(url, options);
       }
-      return btoa(binary);
+
+      return res;
     }
 
     // ============================================
@@ -956,21 +961,14 @@
     // ============================================
     async function connectWithToken() {
       const tokenInput = document.getElementById('accessTokenInput').value.trim();
-
-      if (!tokenInput) {
-        updateStatus('Please enter a token', 'invalid');
-        return;
-      }
+      if (!tokenInput) { updateStatus('Please enter a token', 'invalid'); return; }
 
       accessToken = tokenInput;
       updateStatus('🔄 Connecting...', 'loading');
       document.getElementById('connectBtn').disabled = true;
 
       try {
-        const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-
+        const userResponse = await graphFetch('https://graph.microsoft.com/v1.0/me');
         if (userResponse.status === 401) throw new Error('Token expired or invalid');
         if (!userResponse.ok) throw new Error('Invalid token');
 
@@ -983,11 +981,12 @@
         checkTokenExpiry();
         setInterval(checkTokenExpiry, 60000);
 
-        // reset cached inbox id each connect
+        // reset caches each connect
         inboxFolderIdCache = null;
+        junkFolderIdCache = null;
 
         await loadFolders();
-        await delay(500);
+        await delay(300);
         await loadFolder('inbox');
 
       } catch (error) {
@@ -1002,24 +1001,10 @@
     // FOLDER MANAGEMENT
     // ============================================
     async function loadFolders() {
-      const response = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('Retry-After') || 10;
-        updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
-        await delay(retryAfter * 1000);
-        return loadFolders();
-      }
-
-      if (!response.ok) {
-        updateStatus('❌ Error loading folders', 'invalid');
-        return;
-      }
-
+      const response = await graphFetch('https://graph.microsoft.com/v1.0/me/mailFolders');
+      if (!response.ok) { updateStatus('❌ Error loading folders', 'invalid'); return; }
       const data = await response.json();
-      folders = data.value;
+      folders = data.value || [];
       renderFolders();
     }
 
@@ -1028,38 +1013,35 @@
       const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk'];
 
       folderList.innerHTML = folders
-        .filter(f => defaultFolders.includes(f.displayName.toLowerCase()))
-        .concat(folders.filter(f => !defaultFolders.includes(f.displayName.toLowerCase())))
+        .filter(f => defaultFolders.includes((f.displayName || '').toLowerCase()))
+        .concat(folders.filter(f => !defaultFolders.includes((f.displayName || '').toLowerCase())))
         .map(folder => `
-          <div class="folder-item ${folder.displayName.toLowerCase() === currentFolder ? 'active' : ''}"
+          <div class="folder-item ${folder.displayName?.toLowerCase() === String(currentFolder).toLowerCase() ? 'active' : ''}"
                onclick="loadFolder('${folder.id}')">
             <span class="folder-icon">${getFolderIcon(folder.displayName)}</span>
-            <span class="folder-name">${escapeHtml(folder.displayName)}</span>
+            <span class="folder-name">${escapeHtml(folder.displayName || '')}</span>
             <span class="folder-count">${folder.totalItemCount || 0}</span>
           </div>
         `).join('');
     }
 
     function getFolderIcon(name) {
-      const icons = { 'inbox': '📥', 'sent': '📤', 'drafts': '📝', 'archive': '📦', 'junk': '⚠️', 'deleted': '🗑️' };
-      return icons[name.toLowerCase()] || '📁';
+      const icons = { 'inbox': '📥', 'sent': '📤', 'drafts': '📝', 'archive': '📦', 'junk': '⚠️', 'junk email': '⚠️', 'deleted': '🗑️' };
+      return icons[(name || '').toLowerCase()] || '📁';
     }
 
     async function getFolderId(folderName) {
       try {
-        const safeName = folderName.replace(/'/g, "''"); // simple OData escape
-        const response = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders?$filter=displayName eq '${safeName}'`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-
+        const safeName = folderName.replace(/'/g, "''");
+        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders?$filter=displayName eq '${safeName}'`);
         if (response.ok) {
           const data = await response.json();
           if (data.value && data.value.length > 0) return data.value[0].id;
         }
 
-        const createResponse = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
+        const createResponse = await graphFetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ displayName: folderName })
         });
 
@@ -1068,25 +1050,33 @@
           await loadFolders();
           return newFolder.id;
         }
-      } catch (error) {
-        console.error('Error finding/creating folder:', error);
+      } catch (e) {
+        console.error('Error finding/creating folder:', e);
       }
       return null;
     }
 
-    async function getInboxFolderId() {
-      const res = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders/inbox', {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-      if (!res.ok) throw new Error('Failed to get Inbox folder');
-      const inbox = await res.json();
-      return inbox.id;
+    async function getWellKnownFolderId(wellKnownName) {
+      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${wellKnownName}`);
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Failed to get folder '${wellKnownName}': ${err}`);
+      }
+      const data = await res.json();
+      return data.id;
     }
 
     async function getInboxIdCached() {
       if (inboxFolderIdCache) return inboxFolderIdCache;
-      inboxFolderIdCache = await getInboxFolderId();
+      inboxFolderIdCache = await getWellKnownFolderId('inbox');
       return inboxFolderIdCache;
+    }
+
+    async function getJunkIdCached() {
+      if (junkFolderIdCache) return junkFolderIdCache;
+      // NOTE: well-known name is "junkemail" (not "junk")
+      junkFolderIdCache = await getWellKnownFolderId('junkemail');
+      return junkFolderIdCache;
     }
 
     // ============================================
@@ -1102,21 +1092,13 @@
         let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=20&$orderby=receivedDateTime DESC&$expand=attachments`;
         if (showOnlyUnread) url += '&$filter=isRead eq false';
 
-        const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('Retry-After') || 10;
-          updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
-          await delay(retryAfter * 1000);
-          return loadFolder(folderId);
-        }
-
+        const response = await graphFetch(url);
         if (!response.ok) throw new Error('Failed to load messages');
 
         const data = await response.json();
         messages = data.value || [];
 
-        if (folderId.toLowerCase().includes('draft')) {
+        if (String(folderId).toLowerCase().includes('draft')) {
           drafts.forEach(draft => {
             messages.unshift({
               id: draft.id,
@@ -1133,7 +1115,7 @@
         renderMessageList();
         updateStatus(`✅ Connected as ${userEmail}`, 'valid');
 
-        await delay(500);
+        await delay(300);
         loadFolders();
 
       } catch (error) {
@@ -1149,11 +1131,7 @@
 
     function renderMessageList() {
       const messageList = document.getElementById('messageList');
-
-      if (!messages.length) {
-        messageList.innerHTML = '<div class="loading-message">📭 No messages in this folder</div>';
-        return;
-      }
+      if (!messages.length) { messageList.innerHTML = '<div class="loading-message">📭 No messages in this folder</div>'; return; }
 
       messageList.innerHTML = messages.map(msg => `
         <div class="message-item ${msg.isRead ? '' : 'unread'} ${msg.id === currentMessageId ? 'selected' : ''}"
@@ -1186,41 +1164,23 @@
       }
     }
 
-    // ============================================
-    // SINGLE MESSAGE LOADING
-    // ============================================
     async function loadMessage(messageId) {
       const draft = drafts.find(d => d.id === messageId);
-      if (draft) {
-        currentMessageId = messageId;
-        renderDraftContent(draft);
-        return;
-      }
+      if (draft) { currentMessageId = messageId; renderDraftContent(draft); return; }
 
       currentMessageId = messageId;
 
       try {
-        const response = await fetch(
-          `https://graph.microsoft.com/v1.0/me/messages/${messageId}?$expand=attachments`,
-          { headers: { 'Authorization': `Bearer ${accessToken}` } }
-        );
-
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('Retry-After') || 10;
-          updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
-          await delay(retryAfter * 1000);
-          return loadMessage(messageId);
-        }
-
+        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}?$expand=attachments`);
         if (!response.ok) throw new Error('Failed to load message');
 
         const msg = await response.json();
 
         if (!msg.isRead) {
-          await delay(300);
-          await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+          await delay(150);
+          await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
             method: 'PATCH',
-            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ isRead: true })
           });
 
@@ -1372,30 +1332,15 @@
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(async () => {
         const query = document.getElementById('searchInput').value.trim();
-        if (!query) {
-          loadFolder(currentFolder);
-          return;
-        }
+        if (!query) { loadFolder(currentFolder); return; }
 
         try {
-          const response = await fetch(
-            `https://graph.microsoft.com/v1.0/me/mailFolders/${currentFolder}/messages?$search="${query}"&$top=20`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } }
-          );
-
-          if (response.status === 429) {
-            const retryAfter = response.headers.get('Retry-After') || 10;
-            updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
-            await delay(retryAfter * 1000);
-            return searchMessages();
-          }
-
+          const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${currentFolder}/messages?$search="${query}"&$top=20`);
           if (!response.ok) throw new Error('Search failed');
 
           const data = await response.json();
           messages = data.value || [];
           renderMessageList();
-
         } catch (error) {
           console.error('Search error:', error);
         }
@@ -1404,8 +1349,7 @@
 
     function toggleUnreadFilter() {
       showOnlyUnread = !showOnlyUnread;
-      const filterBtn = document.getElementById('filterBtn');
-      filterBtn.textContent = showOnlyUnread ? '📫 Unread' : '📫 All';
+      document.getElementById('filterBtn').textContent = showOnlyUnread ? '📫 Unread' : '📫 All';
       loadFolder(currentFolder);
     }
 
@@ -1416,155 +1360,134 @@
       if (!currentMessageId || !confirm('Delete this message?')) return;
 
       try {
-        const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
-          method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-
+        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, { method: 'DELETE' });
         if (!response.ok && response.status !== 204) throw new Error('Delete failed');
 
-        await delay(500);
+        await delay(250);
         loadFolder(currentFolder);
         document.getElementById('messageContent').innerHTML = '<div class="loading-message">Message deleted</div>';
         document.getElementById('messageActions').style.display = 'none';
-
       } catch (error) {
         alert('Error deleting message');
       }
     }
 
-    // UPDATED: keep your original markAsJunk behavior but rename it to "moveToJunk"
-    async function moveToJunk() {
-      if (!currentMessageId) return;
+    // ✅ FIXED: move to Junk Email by using /move to the well-known folder "junkemail"
+    async function moveMessageToJunk(messageId) {
+      const junkId = await getJunkIdCached();
 
-      try {
-        const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ moveToJunk: true })
-        });
+      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destinationId: junkId })
+      });
 
-        if (!response.ok) throw new Error('Failed to move to junk');
-
-        await delay(500);
-        loadFolder('inbox');
-        alert('Moved to Junk');
-
-      } catch (error) {
-        alert('Error moving to junk');
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error('Move to Junk failed: ' + err);
       }
+
+      return await res.json(); // moved message
     }
 
-    // NEW: "Report Junk" (best-effort)
-    // Graph reliably supports markAsJunk; true "report to Microsoft / phishing pipeline" typically requires Security/Defender submission APIs + permissions.
-    async function reportAsJunk() {
+    async function addCategory(messageId, categoryName) {
+      if (!categoryName) return;
+      // Get existing categories then add (avoid overwriting if possible)
+      try {
+        const getRes = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}?$select=categories`);
+        if (!getRes.ok) return;
+        const msg = await getRes.json();
+        const existing = Array.isArray(msg.categories) ? msg.categories : [];
+        const next = Array.from(new Set([...existing, categoryName]));
+
+        await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categories: next })
+        });
+      } catch (e) {}
+    }
+
+    async function quickForwardReport(toAddress, subject, htmlBody) {
+      if (!toAddress) return;
+      const message = {
+        subject,
+        body: { contentType: 'HTML', content: htmlBody },
+        toRecipients: [{ emailAddress: { address: toAddress } }]
+      };
+      await graphFetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, saveToSentItems: true })
+      });
+    }
+
+    async function reportJunk() {
       if (!currentMessageId) return;
-      if (!confirm('Report this message as Junk? (It will be moved to Junk)')) return;
+      if (!confirm('Report as Junk and move this message to Junk Email?')) return;
 
       try {
-        const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ moveToJunk: true })
-        });
+        // Mark category first (optional), then move
+        await addCategory(currentMessageId, 'Junk');
 
-        if (!res.ok) {
-          const err = await res.text();
-          throw new Error(err || 'Report junk failed');
+        // Optional: notify security mailbox
+        if (REPORT_JUNK_TO) {
+          const msg = messages.find(m => m.id === currentMessageId);
+          const subj = msg?.subject || '(No subject)';
+          await quickForwardReport(
+            REPORT_JUNK_TO,
+            `Reported Junk: ${subj}`,
+            `User reported a message as <b>Junk</b>.<br><br><b>Subject:</b> ${escapeHtml(subj)}<br><b>From:</b> ${escapeHtml(msg?.from?.emailAddress?.address || '')}`
+          );
         }
 
-        await delay(500);
-        loadFolder('inbox');
-        alert('✅ Reported as Junk (moved to Junk).');
+        const moved = await moveMessageToJunk(currentMessageId);
+
+        // Update UI: reload junk folder and select moved message (optional)
+        alert('✅ Reported as Junk and moved to Junk Email.');
+        await delay(200);
+        await loadFolder('junkemail');
+        currentMessageId = moved.id;
+        await loadMessage(moved.id);
       } catch (e) {
-        alert('❌ Report Junk failed: ' + e.message);
+        alert('❌ ' + e.message);
         console.error(e);
       }
     }
 
-    // NEW: "Report Phishing" (best-effort)
-    // 1) Move message to Junk via markAsJunk (reliable)
-    // 2) OPTIONAL: attempt a security submission via /beta if your tenant/token has the Defender/ThreatSubmission permissions
-    async function reportAsPhishing() {
+    async function reportPhishing() {
       if (!currentMessageId) return;
-      if (!confirm('Report this message as Phishing? (It will be moved to Junk)')) return;
+      if (!confirm('Report as Phishing and move this message to Junk Email?')) return;
 
-      // Step 1: move to junk (works with Mail.ReadWrite)
       try {
-        const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ moveToJunk: true })
-        });
+        await addCategory(currentMessageId, 'Phishing');
 
-        if (!res.ok) {
-          const err = await res.text();
-          throw new Error('Move to junk failed: ' + err);
+        if (REPORT_PHISHING_TO) {
+          const msg = messages.find(m => m.id === currentMessageId);
+          const subj = msg?.subject || '(No subject)';
+          await quickForwardReport(
+            REPORT_PHISHING_TO,
+            `Reported Phishing: ${subj}`,
+            `User reported a message as <b>Phishing</b>.<br><br><b>Subject:</b> ${escapeHtml(subj)}<br><b>From:</b> ${escapeHtml(msg?.from?.emailAddress?.address || '')}`
+          );
         }
+
+        const moved = await moveMessageToJunk(currentMessageId);
+
+        alert('✅ Reported as Phishing and moved to Junk Email.');
+        await delay(200);
+        await loadFolder('junkemail');
+        currentMessageId = moved.id;
+        await loadMessage(moved.id);
       } catch (e) {
-        alert('❌ Could not move message to Junk: ' + e.message);
+        alert('❌ ' + e.message);
         console.error(e);
-        return;
-      }
-
-      // Step 2 (optional): try to submit the raw MIME via Graph Security (beta)
-      // If you don’t have permissions, this will fail gracefully and still keep the email in Junk.
-      let submissionSucceeded = false;
-      try {
-        // Get MIME content
-        const mimeRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/$value`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-
-        if (mimeRes.ok) {
-          const buf = await mimeRes.arrayBuffer();
-          const mimeBase64 = arrayBufferToBase64(buf);
-
-          // Best-effort payload (varies by tenant/policy/permissions)
-          // If your org has threat submission enabled, this may work; otherwise it will return 403/400.
-          const payload = {
-            "@odata.type": "#microsoft.graph.security.emailContentThreatSubmission",
-            "category": "phishing",
-            "recipientEmailAddress": userEmail || "",
-            "fileName": `message_${currentMessageId}.eml`,
-            "fileContent": mimeBase64
-          };
-
-          const submitRes = await fetch(`https://graph.microsoft.com/beta/security/threatSubmission/emailThreats`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          if (submitRes.ok) {
-            submissionSucceeded = true;
-          } else {
-            // swallow but log so you can see real error
-            const err = await submitRes.text();
-            console.warn('Phishing submission failed (beta):', err);
-          }
-        } else {
-          const err = await mimeRes.text();
-          console.warn('Could not fetch MIME $value:', err);
-        }
-      } catch (e) {
-        console.warn('Phishing submission exception:', e);
-      }
-
-      await delay(500);
-      loadFolder('inbox');
-
-      if (submissionSucceeded) {
-        alert('✅ Reported as Phishing (moved to Junk + submitted).');
-      } else {
-        alert('✅ Moved to Junk. (Phishing submission may require extra Security/Defender permissions; check console for details.)');
       }
     }
 
     // ============================================
     // RULE MANAGEMENT - REAL SERVER-SIDE RULES
     // ============================================
-
     async function openRulesModal() {
       document.getElementById('rulesModal').classList.add('active');
 
@@ -1594,6 +1517,7 @@
       const action = document.getElementById('actionType').value;
       selectedAction = action;
 
+      // markJunk doesn't need a value (it moves to Junk Email automatically)
       const needsValue = ['move', 'copy', 'forward', 'forwardAttachment', 'redirect', 'categorize', 'importance'].includes(action);
       document.getElementById('actionValue').style.display = needsValue ? 'block' : 'none';
 
@@ -1650,13 +1574,9 @@
       renderAdditionalActions();
     }
 
-    // -------- Server rules API helpers --------
-
     async function fetchServerRules() {
       const inboxId = await getInboxIdCached();
-      const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
+      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`);
       if (!res.ok) {
         const err = await res.text();
         throw new Error('Failed to load server rules: ' + err);
@@ -1708,9 +1628,9 @@
       try {
         const inboxId = await getInboxIdCached();
 
-        const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
+        const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
           method: 'PATCH',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ isEnabled: !currentlyEnabled })
         });
 
@@ -1732,9 +1652,8 @@
       try {
         const inboxId = await getInboxIdCached();
 
-        const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
-          method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${accessToken}` }
+        const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
+          method: 'DELETE'
         });
 
         if (!res.ok && res.status !== 204) {
@@ -1749,7 +1668,6 @@
       }
     }
 
-    // -------- Create server-side rule (UPDATED payload) --------
     async function createServerSideRule(rule) {
       const inboxId = await getInboxIdCached();
 
@@ -1758,21 +1676,11 @@
       const cv = (rule.condition.value || '').trim();
 
       switch (rule.condition.type) {
-        case 'from':
-          conditions.senderContains = [cv];
-          break;
-        case 'to':
-          conditions.recipientContains = [cv];
-          break;
-        case 'subject':
-          conditions.subjectContains = [cv];
-          break;
-        case 'body':
-          conditions.bodyContains = [cv];
-          break;
-        case 'hasAttachment':
-          conditions.hasAttachments = true;
-          break;
+        case 'from': conditions.senderContains = [cv]; break;
+        case 'to': conditions.recipientContains = [cv]; break;
+        case 'subject': conditions.subjectContains = [cv]; break;
+        case 'body': conditions.bodyContains = [cv]; break;
+        case 'hasAttachment': conditions.hasAttachments = true; break;
         case 'importance':
           conditions.importance = (cv || 'normal').toLowerCase() === 'high' ? 'high' : 'normal';
           break;
@@ -1785,20 +1693,10 @@
       if (rule.exception?.type) {
         const ev = (rule.exception.value || '').trim();
         switch (rule.exception.type) {
-          case 'from':
-            exceptions.senderContains = [ev];
-            break;
-          case 'to':
-            exceptions.recipientContains = [ev];
-            break;
-          case 'subject':
-            exceptions.subjectContains = [ev];
-            break;
-          case 'hasAttachment':
-            exceptions.hasAttachments = true;
-            break;
-          default:
-            console.warn('Unsupported exception:', rule.exception.type);
+          case 'from': exceptions.senderContains = [ev]; break;
+          case 'to': exceptions.recipientContains = [ev]; break;
+          case 'subject': exceptions.subjectContains = [ev]; break;
+          case 'hasAttachment': exceptions.hasAttachments = true; break;
         }
       }
 
@@ -1826,11 +1724,14 @@
           case 'markRead':
             actions.markAsRead = true;
             break;
+
+          // ✅ UPDATED: "Move to Junk Email" rule action now uses well-known junkemail folder id
           case 'markJunk': {
-            const junkFolder = folders.find(f => f.displayName.toLowerCase() === 'junk');
-            if (junkFolder) actions.moveToFolder = junkFolder.id;
+            const junkId = await getJunkIdCached();
+            actions.moveToFolder = junkId;
             break;
           }
+
           case 'forward': {
             if (!v) throw new Error('Forward requires an email address');
             actions.forwardTo = v.split(',').map(email => ({ emailAddress: { address: email.trim() } }));
@@ -1851,10 +1752,8 @@
         }
       }
 
-      // IMPORTANT: stopProcessingRules belongs inside actions
       actions.stopProcessingRules = !!rule.stopProcessing;
 
-      // Sequence: append after existing
       const existing = await fetchServerRules();
       const nextSeq = existing.length ? Math.max(...existing.map(r => r.sequence || 0)) + 1 : 1;
 
@@ -1868,11 +1767,9 @@
 
       if (Object.keys(exceptions).length) payload.exceptions = exceptions;
 
-      console.log('Creating rule with payload:', payload);
-
-      const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules`, {
+      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
@@ -1887,7 +1784,6 @@
     async function saveRule() {
       const ruleName = document.getElementById('ruleName').value.trim();
       if (!ruleName) { alert('Please enter a rule name'); return; }
-
       if (!selectedCondition) { alert('Please select a condition'); return; }
       if (!selectedAction) { alert('Please select an action'); return; }
 
@@ -1949,11 +1845,7 @@
     async function previewAttachment(messageId, attachmentId, fileName, contentType) {
       if (contentType === 'application/pdf') {
         try {
-          const response = await fetch(
-            `https://graph.microsoft.com/v1.0/me/messages/${messageId}/attachments/${attachmentId}/$value`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } }
-          );
-
+          const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/attachments/${attachmentId}/$value`);
           if (response.ok) {
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
@@ -2043,10 +1935,7 @@
 
       const message = {
         subject: document.getElementById('composeSubject').value || '(No subject)',
-        body: {
-          contentType: 'HTML',
-          content: document.getElementById('composeBody').value.replace(/\n/g, '<br>') || ''
-        },
+        body: { contentType: 'HTML', content: document.getElementById('composeBody').value.replace(/\n/g, '<br>') || '' },
         toRecipients: to.map(email => ({ emailAddress: { address: email } })),
         ccRecipients: cc.map(email => ({ emailAddress: { address: email } })),
         bccRecipients: bcc.map(email => ({ emailAddress: { address: email } }))
@@ -2062,28 +1951,21 @@
       }
 
       try {
-        const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        const response = await graphFetch('https://graph.microsoft.com/v1.0/me/sendMail', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message, saveToSentItems: true })
         });
-
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('Retry-After') || 10;
-          alert(`Rate limited. Please wait ${retryAfter} seconds.`);
-          return;
-        }
 
         if (response.ok) {
           alert('Email sent successfully!');
           closeCompose();
-          await delay(500);
+          await delay(300);
           if (currentFolder === 'sent') loadFolder('sent');
         } else {
           const error = await response.text();
           alert('Error sending email: ' + error);
         }
-
       } catch (error) {
         alert('Error sending email: ' + error.message);
       }
@@ -2159,7 +2041,7 @@
 
     function moveToFolder() { alert('Move to folder functionality coming soon!'); }
 
-    // Set up additional action modal change handler
+    // Additional action modal handler
     document.getElementById('additionalActionType')?.addEventListener('change', function() {
       const action = this.value;
       const needsValue = ['move', 'copy', 'forward', 'forwardAttachment', 'redirect', 'categorize', 'importance'].includes(action);
@@ -2177,7 +2059,6 @@
     // Load saved token on startup
     window.onload = function() {
       const savedAccess = localStorage.getItem('accessToken');
-
       if (savedAccess) {
         document.getElementById('accessTokenInput').value = savedAccess;
         accessToken = savedAccess;
@@ -2186,15 +2067,10 @@
         if (payload && payload.exp) {
           const expiryDate = new Date(payload.exp * 1000);
           const now = new Date();
-
-          if (expiryDate > now) {
-            setTimeout(connectWithToken, 500);
-          } else {
-            localStorage.removeItem('accessToken');
-            updateStatus('🔌 Token expired - please enter new token', 'invalid');
-          }
+          if (expiryDate > now) setTimeout(connectWithToken, 300);
+          else { localStorage.removeItem('accessToken'); updateStatus('🔌 Token expired - please enter new token', 'invalid'); }
         } else {
-          setTimeout(connectWithToken, 500);
+          setTimeout(connectWithToken, 300);
         }
       }
     };
