@@ -555,11 +555,55 @@
     }
 
     .message-body iframe { width: 100%; border: none; background: white; }
+
+    /* ===========================
+       NEW: RICH HTML EDITOR + SIGNATURE
+       =========================== */
+    .compose-toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .toolbar-btn {
+      padding: 6px 10px;
+      border: 1px solid #8a8886;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .toolbar-btn:hover { background: #f5f5f5; }
+
+    .compose-editor {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid #8a8886;
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 14px;
+      background: white;
+      overflow: auto;
+      outline: none;
+    }
+    .compose-editor:focus {
+      border-color: #0078d4;
+      box-shadow: 0 0 0 2px rgba(0,120,212,0.3);
+    }
+    .compose-editor img { max-width: 100%; height: auto; }
+
+    .hint {
+      font-size: 12px;
+      color: #605e5c;
+      margin-top: -8px;
+      margin-bottom: 12px;
+    }
   </style>
 
-  <!-- PDF.js for PDF preview -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 </head>
+
 <body>
   <div class="app-container">
     <!-- Left Navigation -->
@@ -634,9 +678,9 @@
             <button class="action-btn" onclick="forwardMessage()">↪ Forward</button>
             <button class="action-btn" onclick="deleteMessage()">🗑 Delete</button>
 
-            <!-- UPDATED: Junk/Phishing actions -->
-            <button class="action-btn" onclick="reportJunk()">🚫 Report Junk</button>
-            <button class="action-btn" onclick="reportPhishing()">🎣 Report Phishing</button>
+            <!-- UPDATED: Junk + Phishing actions -->
+            <button class="action-btn" onclick="moveCurrentMessageToJunk()">🚫 Move to Junk</button>
+            <button class="action-btn" onclick="reportPhishingCurrentMessage()">🎣 Report Phishing</button>
 
             <button class="action-btn" onclick="moveToFolder()">📁 Move</button>
           </div>
@@ -661,18 +705,66 @@
         <input type="text" id="composeBcc" placeholder="Bcc" />
         <input type="text" id="composeSubject" placeholder="Subject" />
 
-        <!-- Attachment Area -->
         <div class="attachment-area" onclick="document.getElementById('fileInput').click()">
           <input type="file" id="fileInput" multiple style="display: none;" onchange="handleFileSelect(event)" />
           <span>📎 Click to attach files or drag them here</span>
         </div>
         <div id="attachmentList" class="attachment-list"></div>
 
-        <textarea id="composeBody" placeholder="Message (HTML supported, paste signatures here)"></textarea>
+        <!-- NEW: toolbar -->
+        <div class="compose-toolbar">
+          <button class="toolbar-btn" onclick="formatDoc('bold')"><b>B</b></button>
+          <button class="toolbar-btn" onclick="formatDoc('italic')"><i>I</i></button>
+          <button class="toolbar-btn" onclick="formatDoc('underline')"><u>U</u></button>
+          <button class="toolbar-btn" onclick="formatDoc('insertUnorderedList')">• List</button>
+          <button class="toolbar-btn" onclick="formatDoc('createLink')">🔗 Link</button>
+          <button class="toolbar-btn" onclick="insertSignature()">✍️ Insert Signature</button>
+          <button class="toolbar-btn" onclick="openSignatureModal()">🛠 Signature Settings</button>
+        </div>
+        <div class="hint">
+          Paste your Outlook signature here. If it includes a logo, use Signature Settings to upload the logo so it sends inline like Outlook (CID) and never becomes plain text.
+        </div>
+
+        <!-- NEW: contenteditable editor (keeps HTML + images) -->
+        <div id="composeBody" class="compose-editor" contenteditable="true"></div>
       </div>
       <div class="modal-footer">
         <button class="btn" onclick="saveDraft()">Save Draft</button>
         <button class="btn btn-primary" onclick="sendEmail()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Signature Modal (NEW) -->
+  <div class="modal" id="signatureModal" style="z-index: 2400;">
+    <div class="modal-content" style="width: 720px;">
+      <div class="modal-header">
+        <h3>Signature Settings</h3>
+        <button class="close-btn" onclick="closeSignatureModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size: 13px; color:#605e5c; margin-bottom: 10px;">
+          Tip: Upload your company logo here. We’ll embed it as an <b>inline attachment</b> (CID) when sending—same behavior Outlook uses—so it renders reliably in recipients’ email clients.
+        </div>
+
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom: 12px;">
+          <button class="btn btn-primary" onclick="document.getElementById('signatureLogoInput').click()">Upload Logo</button>
+          <input id="signatureLogoInput" type="file" accept="image/*" style="display:none" onchange="handleSignatureLogo(event)" />
+          <div id="signatureLogoMeta" style="font-size: 13px; color:#201f1e;"></div>
+          <button class="btn" onclick="removeSignatureLogo()">Remove Logo</button>
+        </div>
+
+        <div style="font-size: 13px; color:#605e5c; margin-bottom: 6px;">
+          Signature HTML (you can paste the exact Outlook signature here):
+        </div>
+        <div id="signatureEditor" class="compose-editor" contenteditable="true" style="min-height: 180px;"></div>
+        <div class="hint" style="margin-top: 10px;">
+          If your signature HTML contains an <code>&lt;img&gt;</code> tag for the logo, you can leave it—this app will replace it with your uploaded logo automatically when inserting/sending.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveSignatureSettings()">Save</button>
+        <button class="btn" onclick="closeSignatureModal()">Close</button>
       </div>
     </div>
   </div>
@@ -687,7 +779,8 @@
       <div class="rules-modal-body">
         <div class="rule-section">
           <h3>1. Name your rule</h3>
-          <input type="text" id="ruleName" placeholder="Enter a name" style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
+          <input type="text" id="ruleName" placeholder="Enter a name"
+                 style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
         </div>
 
         <div class="rule-section">
@@ -700,20 +793,12 @@
                 <optgroup label="People">
                   <option value="from">From</option>
                   <option value="to">To</option>
-                  <option value="myName">My name is</option>
-                  <option value="onTo">I'm on the To line</option>
-                  <option value="onCc">I'm on the Cc line</option>
-                  <option value="notOnTo">I'm not on the To line</option>
-                  <option value="onlyRecipient">I'm the only recipient</option>
                 </optgroup>
                 <optgroup label="Subject">
                   <option value="subject">Subject includes</option>
                 </optgroup>
                 <optgroup label="Keywords">
                   <option value="body">Message body includes</option>
-                  <option value="senderAddress">Sender address includes</option>
-                  <option value="recipientAddress">Recipient address includes</option>
-                  <option value="header">Message header includes</option>
                 </optgroup>
                 <optgroup label="Marked with">
                   <option value="importance">Importance</option>
@@ -722,7 +807,8 @@
               </select>
             </div>
             <div id="conditionValue" style="display: none;">
-              <input type="text" id="conditionInput" placeholder="Enter value" style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
+              <input type="text" id="conditionInput" placeholder="Enter value"
+                     style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
             </div>
           </div>
         </div>
@@ -739,24 +825,21 @@
                   <optgroup label="Organize">
                     <option value="move">Move to folder</option>
                     <option value="copy">Copy to folder</option>
+                    <option value="moveJunk">Move to Junk folder</option>
                     <option value="delete">Delete</option>
-                    <option value="pin">Pin to top</option>
                   </optgroup>
                   <optgroup label="Mark message">
                     <option value="markRead">Mark as read</option>
-                    <option value="markJunk">Move to Junk Email</option>
-                    <option value="importance">Mark with importance</option>
-                    <option value="categorize">Categorize</option>
                   </optgroup>
                   <optgroup label="Route">
                     <option value="forward">Forward to</option>
-                    <option value="forwardAttachment">Forward as attachment</option>
                     <option value="redirect">Redirect to</option>
                   </optgroup>
                 </select>
               </div>
               <div id="actionValue" style="display: none;">
-                <input type="text" id="actionInput" placeholder="Enter folder name or email" style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
+                <input type="text" id="actionInput" placeholder="Enter folder name or email"
+                       style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
               </div>
             </div>
 
@@ -814,24 +897,21 @@
             <optgroup label="Organize">
               <option value="move">Move to folder</option>
               <option value="copy">Copy to folder</option>
+              <option value="moveJunk">Move to Junk folder</option>
               <option value="delete">Delete</option>
-              <option value="pin">Pin to top</option>
             </optgroup>
             <optgroup label="Mark message">
               <option value="markRead">Mark as read</option>
-              <option value="markJunk">Move to Junk Email</option>
-              <option value="importance">Mark with importance</option>
-              <option value="categorize">Categorize</option>
             </optgroup>
             <optgroup label="Route">
               <option value="forward">Forward to</option>
-              <option value="forwardAttachment">Forward as attachment</option>
               <option value="redirect">Redirect to</option>
             </optgroup>
           </select>
         </div>
         <div id="additionalActionValue" style="display: none; margin-top: 12px;">
-          <input type="text" id="additionalActionInput" placeholder="Enter folder name or email" style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
+          <input type="text" id="additionalActionInput" placeholder="Enter folder name or email"
+                 style="width: 100%; padding: 8px; border: 1px solid #8a8886; border-radius: 4px;" />
         </div>
       </div>
       <div class="modal-footer">
@@ -868,23 +948,21 @@
     let attachments = [];
     let drafts = JSON.parse(localStorage.getItem('emailDrafts') || '[]');
 
+    // Signature (NEW)
+    const SIGNATURE_KEY = 'emailSignatureV1';
+    let signatureSettings = loadSignatureSettingsFromStorage();
+
     // Rule builder state
     let selectedCondition = '';
     let selectedAction = '';
     let additionalActions = [];
 
-    // Cache well-known folder ids
+    // Cache ids
     let inboxFolderIdCache = null;
     let junkFolderIdCache = null;
 
-    // Optional: if you want “Report” to also email your security team, set these:
-    // const REPORT_JUNK_TO = "security@yourcompany.com";
-    // const REPORT_PHISHING_TO = "phishing@yourcompany.com";
-    const REPORT_JUNK_TO = "";
-    const REPORT_PHISHING_TO = "";
-
     // ============================================
-    // HELPER FUNCTIONS
+    // HELPERS
     // ============================================
     async function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
@@ -901,13 +979,11 @@
 
     function checkTokenExpiry() {
       if (!accessToken) return false;
-
       const payload = decodeToken(accessToken);
       if (payload && payload.exp) {
         const expiryDate = new Date(payload.exp * 1000);
         const now = new Date();
         const timeLeft = expiryDate - now;
-
         if (timeLeft < 10 * 60 * 1000 && timeLeft > 0) {
           document.getElementById('expiryWarning').style.display = 'inline-block';
           document.getElementById('expiryWarning').textContent = `⚠️ Token expires in ${Math.round(timeLeft / 60000)} minutes`;
@@ -937,38 +1013,264 @@
         .replace(/'/g, '&#039;');
     }
 
-    async function graphFetch(url, options = {}) {
-      const res = await fetch(url, {
-        ...options,
-        headers: {
-          ...(options.headers || {}),
-          'Authorization': `Bearer ${accessToken}`
-        }
+    function getCurrentMessageFromList() {
+      return messages.find(m => m.id === currentMessageId) || null;
+    }
+
+    function uuidLike() {
+      return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
       });
-
-      if (res.status === 429) {
-        const retryAfter = res.headers.get('Retry-After') || 10;
-        updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
-        await delay(Number(retryAfter) * 1000);
-        return graphFetch(url, options);
-      }
-
-      return res;
     }
 
     // ============================================
-    // CONNECT WITH TOKEN
+    // NEW: Editor + Signature helpers
+    // ============================================
+    function formatDoc(cmd) {
+      if (cmd === 'createLink') {
+        const url = prompt('Enter URL (https://...)');
+        if (!url) return;
+        document.execCommand('createLink', false, url);
+        return;
+      }
+      document.execCommand(cmd, false, null);
+    }
+
+    function getComposeHtml() {
+      return document.getElementById('composeBody').innerHTML || '';
+    }
+
+    function setComposeHtml(html) {
+      document.getElementById('composeBody').innerHTML = html || '';
+    }
+
+    function loadSignatureSettingsFromStorage() {
+      try {
+        const raw = localStorage.getItem(SIGNATURE_KEY);
+        if (!raw) return { html: '', logoDataUrl: '', logoName: '', logoType: '' };
+        const parsed = JSON.parse(raw);
+        return {
+          html: parsed.html || '',
+          logoDataUrl: parsed.logoDataUrl || '',
+          logoName: parsed.logoName || '',
+          logoType: parsed.logoType || ''
+        };
+      } catch (e) {
+        return { html: '', logoDataUrl: '', logoName: '', logoType: '' };
+      }
+    }
+
+    function persistSignatureSettings() {
+      localStorage.setItem(SIGNATURE_KEY, JSON.stringify(signatureSettings));
+    }
+
+    function openSignatureModal() {
+      document.getElementById('signatureModal').classList.add('active');
+      document.getElementById('signatureEditor').innerHTML = signatureSettings.html || '';
+      renderSignatureLogoMeta();
+    }
+
+    function closeSignatureModal() {
+      document.getElementById('signatureModal').classList.remove('active');
+    }
+
+    function renderSignatureLogoMeta() {
+      const el = document.getElementById('signatureLogoMeta');
+      if (!signatureSettings.logoDataUrl) {
+        el.textContent = 'No logo uploaded';
+        return;
+      }
+      el.textContent = `Logo: ${signatureSettings.logoName || 'image'} (${signatureSettings.logoType || 'image/*'})`;
+    }
+
+    function handleSignatureLogo(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        signatureSettings.logoDataUrl = String(e.target.result || '');
+        signatureSettings.logoName = file.name || 'logo';
+        signatureSettings.logoType = file.type || 'image/png';
+        persistSignatureSettings();
+        renderSignatureLogoMeta();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function removeSignatureLogo() {
+      signatureSettings.logoDataUrl = '';
+      signatureSettings.logoName = '';
+      signatureSettings.logoType = '';
+      persistSignatureSettings();
+      renderSignatureLogoMeta();
+    }
+
+    function saveSignatureSettings() {
+      signatureSettings.html = document.getElementById('signatureEditor').innerHTML || '';
+      persistSignatureSettings();
+      alert('✅ Signature saved');
+      closeSignatureModal();
+    }
+
+    function insertHtmlAtCursor(html) {
+      // Works well for contenteditable in most browsers
+      document.execCommand('insertHTML', false, html);
+    }
+
+    function buildSignatureHtmlForInsert() {
+      let html = signatureSettings.html || '';
+      if (!html) return '';
+
+      // If user uploaded a logo, ensure there's an <img> somewhere.
+      // Strategy:
+      // - If signature already has an <img>, replace the FIRST img src with our uploaded logo data URL.
+      // - Else, prepend the logo image at the top.
+      if (signatureSettings.logoDataUrl) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(`<div id="wrap">${html}</div>`, 'text/html');
+        const wrap = doc.getElementById('wrap');
+        const firstImg = wrap && wrap.querySelector('img');
+
+        if (firstImg) {
+          firstImg.setAttribute('src', signatureSettings.logoDataUrl);
+          firstImg.setAttribute('alt', firstImg.getAttribute('alt') || 'Company Logo');
+        } else if (wrap) {
+          const img = doc.createElement('img');
+          img.src = signatureSettings.logoDataUrl;
+          img.alt = 'Company Logo';
+          img.style.maxWidth = '180px';
+          img.style.height = 'auto';
+          const div = doc.createElement('div');
+          div.appendChild(img);
+          div.appendChild(doc.createElement('br'));
+          wrap.prepend(div);
+        }
+
+        html = wrap ? wrap.innerHTML : html;
+      }
+
+      // Outlook-ish: signatures typically separated by a line break
+      return `<div><br></div><div>${html}</div>`;
+    }
+
+    function insertSignature() {
+      const sig = buildSignatureHtmlForInsert();
+      if (!sig) {
+        alert('No signature saved. Click "Signature Settings" first.');
+        return;
+      }
+      const editor = document.getElementById('composeBody');
+      editor.focus();
+      insertHtmlAtCursor(sig);
+    }
+
+    // Convert inline data:image/* in HTML -> Graph inline attachments (CID)
+    function extractInlineImagesAsCid(html) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html || '<div></div>', 'text/html');
+
+      const imgs = Array.from(doc.querySelectorAll('img'));
+      const inlineAttachments = [];
+
+      imgs.forEach((img, idx) => {
+        const src = img.getAttribute('src') || '';
+        if (!src.startsWith('data:')) return;
+
+        // data:[mime];base64,[content]
+        const m = src.match(/^data:([^;]+);base64,(.+)$/);
+        if (!m) return;
+
+        const mime = m[1];
+        const b64 = m[2];
+        const contentId = `inline_${Date.now()}_${idx}_${uuidLike()}@local`;
+
+        // choose a name with extension if possible
+        const ext = (mime.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+        const name = `inline-image-${idx + 1}.${ext}`;
+
+        inlineAttachments.push({
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name,
+          contentType: mime,
+          contentBytes: b64,
+          isInline: true,
+          contentId: contentId
+        });
+
+        img.setAttribute('src', `cid:${contentId}`);
+      });
+
+      const outHtml = doc.body ? doc.body.innerHTML : html;
+      return { html: outHtml, inlineAttachments };
+    }
+
+    // Paste handling in editor: keep rich HTML + allow pasted images
+    function setupComposeEditorPasteHandling() {
+      const editor = document.getElementById('composeBody');
+      if (!editor) return;
+
+      editor.addEventListener('paste', (e) => {
+        const cd = e.clipboardData;
+        if (!cd) return;
+
+        // If clipboard has image file(s), insert them as data URLs (so we can CID them at send-time)
+        const files = Array.from(cd.files || []);
+        const imageFiles = files.filter(f => (f.type || '').startsWith('image/'));
+        if (imageFiles.length) {
+          e.preventDefault();
+          imageFiles.forEach(file => {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+              const dataUrl = String(evt.target.result || '');
+              const imgHtml = `<img src="${dataUrl}" alt="${escapeHtml(file.name || 'image')}" style="max-width:220px;height:auto;" />`;
+              editor.focus();
+              insertHtmlAtCursor(imgHtml);
+            };
+            reader.readAsDataURL(file);
+          });
+          return;
+        }
+
+        // Prefer HTML if available (prevents "plain text" flattening)
+        const html = cd.getData('text/html');
+        if (html) {
+          e.preventDefault();
+          editor.focus();
+          insertHtmlAtCursor(html);
+          return;
+        }
+
+        // Fallback: plain text as text
+        const text = cd.getData('text/plain');
+        if (text) {
+          e.preventDefault();
+          editor.focus();
+          insertHtmlAtCursor(escapeHtml(text).replace(/\n/g, '<br>'));
+        }
+      });
+    }
+
+    // ============================================
+    // CONNECT
     // ============================================
     async function connectWithToken() {
       const tokenInput = document.getElementById('accessTokenInput').value.trim();
-      if (!tokenInput) { updateStatus('Please enter a token', 'invalid'); return; }
+      if (!tokenInput) {
+        updateStatus('Please enter a token', 'invalid');
+        return;
+      }
 
       accessToken = tokenInput;
       updateStatus('🔄 Connecting...', 'loading');
       document.getElementById('connectBtn').disabled = true;
 
       try {
-        const userResponse = await graphFetch('https://graph.microsoft.com/v1.0/me');
+        const userResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
         if (userResponse.status === 401) throw new Error('Token expired or invalid');
         if (!userResponse.ok) throw new Error('Invalid token');
 
@@ -976,17 +1278,17 @@
         userEmail = userData.mail || userData.userPrincipalName;
 
         updateStatus(`✅ Connected as ${userEmail}`, 'valid');
-
         localStorage.setItem('accessToken', accessToken);
-        checkTokenExpiry();
-        setInterval(checkTokenExpiry, 60000);
 
-        // reset caches each connect
+        // reset caches
         inboxFolderIdCache = null;
         junkFolderIdCache = null;
 
+        checkTokenExpiry();
+        setInterval(checkTokenExpiry, 60000);
+
         await loadFolders();
-        await delay(300);
+        await delay(400);
         await loadFolder('inbox');
 
       } catch (error) {
@@ -998,11 +1300,25 @@
     }
 
     // ============================================
-    // FOLDER MANAGEMENT
+    // FOLDERS
     // ============================================
     async function loadFolders() {
-      const response = await graphFetch('https://graph.microsoft.com/v1.0/me/mailFolders');
-      if (!response.ok) { updateStatus('❌ Error loading folders', 'invalid'); return; }
+      const response = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After') || 10;
+        updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
+        await delay(retryAfter * 1000);
+        return loadFolders();
+      }
+
+      if (!response.ok) {
+        updateStatus('❌ Error loading folders', 'invalid');
+        return;
+      }
+
       const data = await response.json();
       folders = data.value || [];
       renderFolders();
@@ -1010,7 +1326,7 @@
 
     function renderFolders() {
       const folderList = document.getElementById('folderList');
-      const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk'];
+      const defaultFolders = ['inbox', 'sent', 'drafts', 'archive', 'junk', 'junk email', 'deleted'];
 
       folderList.innerHTML = folders
         .filter(f => defaultFolders.includes((f.displayName || '').toLowerCase()))
@@ -1026,22 +1342,69 @@
     }
 
     function getFolderIcon(name) {
-      const icons = { 'inbox': '📥', 'sent': '📤', 'drafts': '📝', 'archive': '📦', 'junk': '⚠️', 'junk email': '⚠️', 'deleted': '🗑️' };
-      return icons[(name || '').toLowerCase()] || '📁';
+      const icons = { 'inbox': '📥', 'sent': '📤', 'sent items': '📤', 'drafts': '📝', 'archive': '📦', 'junk': '⚠️', 'junk email': '⚠️', 'deleted': '🗑️', 'deleted items': '🗑️' };
+      return icons[String(name || '').toLowerCase()] || '📁';
+    }
+
+    function getFolderName(folderId) {
+      const folder = folders.find(f => f.id === folderId);
+      return folder ? folder.displayName : 'folder';
+    }
+
+    async function getInboxFolderId() {
+      const res = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders/inbox', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (!res.ok) throw new Error('Failed to get Inbox folder');
+      const inbox = await res.json();
+      return inbox.id;
+    }
+
+    async function getInboxIdCached() {
+      if (inboxFolderIdCache) return inboxFolderIdCache;
+      inboxFolderIdCache = await getInboxFolderId();
+      return inboxFolderIdCache;
+    }
+
+    async function getJunkFolderId() {
+      // Try well-known name first
+      let res = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders/junkemail', {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (res.ok) {
+        const j = await res.json();
+        return j.id;
+      }
+
+      // Fallback: find by displayName
+      if (!folders.length) await loadFolders();
+      const junk = folders.find(f => ['junk email', 'junk'].includes(String(f.displayName || '').toLowerCase()));
+      if (junk) return junk.id;
+
+      throw new Error('Could not locate Junk folder (junkemail).');
+    }
+
+    async function getJunkIdCached() {
+      if (junkFolderIdCache) return junkFolderIdCache;
+      junkFolderIdCache = await getJunkFolderId();
+      return junkFolderIdCache;
     }
 
     async function getFolderId(folderName) {
       try {
         const safeName = folderName.replace(/'/g, "''");
-        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders?$filter=displayName eq '${safeName}'`);
+        const response = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders?$filter=displayName eq '${safeName}'`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
         if (response.ok) {
           const data = await response.json();
           if (data.value && data.value.length > 0) return data.value[0].id;
         }
 
-        const createResponse = await graphFetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
+        const createResponse = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ displayName: folderName })
         });
 
@@ -1050,49 +1413,35 @@
           await loadFolders();
           return newFolder.id;
         }
-      } catch (e) {
-        console.error('Error finding/creating folder:', e);
+      } catch (error) {
+        console.error('Error finding/creating folder:', error);
       }
       return null;
     }
 
-    async function getWellKnownFolderId(wellKnownName) {
-      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${wellKnownName}`);
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Failed to get folder '${wellKnownName}': ${err}`);
-      }
-      const data = await res.json();
-      return data.id;
-    }
-
-    async function getInboxIdCached() {
-      if (inboxFolderIdCache) return inboxFolderIdCache;
-      inboxFolderIdCache = await getWellKnownFolderId('inbox');
-      return inboxFolderIdCache;
-    }
-
-    async function getJunkIdCached() {
-      if (junkFolderIdCache) return junkFolderIdCache;
-      // NOTE: well-known name is "junkemail" (not "junk")
-      junkFolderIdCache = await getWellKnownFolderId('junkemail');
-      return junkFolderIdCache;
-    }
-
     // ============================================
-    // MESSAGE MANAGEMENT
+    // MESSAGES
     // ============================================
     async function loadFolder(folderId) {
       currentFolder = folderId;
       renderFolders();
-
       updateStatus(`🔄 Loading ${getFolderName(folderId)}...`, 'loading');
 
       try {
         let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=20&$orderby=receivedDateTime DESC&$expand=attachments`;
         if (showOnlyUnread) url += '&$filter=isRead eq false';
 
-        const response = await graphFetch(url);
+        const response = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After') || 10;
+          updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
+          await delay(retryAfter * 1000);
+          return loadFolder(folderId);
+        }
+
         if (!response.ok) throw new Error('Failed to load messages');
 
         const data = await response.json();
@@ -1115,7 +1464,7 @@
         renderMessageList();
         updateStatus(`✅ Connected as ${userEmail}`, 'valid');
 
-        await delay(300);
+        await delay(400);
         loadFolders();
 
       } catch (error) {
@@ -1124,14 +1473,12 @@
       }
     }
 
-    function getFolderName(folderId) {
-      const folder = folders.find(f => f.id === folderId);
-      return folder ? folder.displayName : 'folder';
-    }
-
     function renderMessageList() {
       const messageList = document.getElementById('messageList');
-      if (!messages.length) { messageList.innerHTML = '<div class="loading-message">📭 No messages in this folder</div>'; return; }
+      if (!messages.length) {
+        messageList.innerHTML = '<div class="loading-message">📭 No messages in this folder</div>';
+        return;
+      }
 
       messageList.innerHTML = messages.map(msg => `
         <div class="message-item ${msg.isRead ? '' : 'unread'} ${msg.id === currentMessageId ? 'selected' : ''}"
@@ -1159,28 +1506,41 @@
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } else if (date.toDateString() === yesterday.toDateString()) {
         return 'Yesterday';
-      } else {
-        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
       }
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     }
 
     async function loadMessage(messageId) {
       const draft = drafts.find(d => d.id === messageId);
-      if (draft) { currentMessageId = messageId; renderDraftContent(draft); return; }
+      if (draft) {
+        currentMessageId = messageId;
+        renderDraftContent(draft);
+        return;
+      }
 
       currentMessageId = messageId;
 
       try {
-        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}?$expand=attachments`);
+        const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}?$expand=attachments`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After') || 10;
+          updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
+          await delay(retryAfter * 1000);
+          return loadMessage(messageId);
+        }
+
         if (!response.ok) throw new Error('Failed to load message');
 
         const msg = await response.json();
 
         if (!msg.isRead) {
           await delay(150);
-          await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+          await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ isRead: true })
           });
 
@@ -1197,70 +1557,35 @@
     }
 
     function renderDraftContent(draft) {
-      const actions = document.getElementById('messageActions');
-      actions.style.display = 'flex';
-
-      const content = document.getElementById('messageContent');
-      content.innerHTML = `
+      document.getElementById('messageActions').style.display = 'flex';
+      document.getElementById('messageContent').innerHTML = `
         <div class="message-details">
           <h2>${escapeHtml(draft.subject || '(No subject)')} <span class="draft-badge">DRAFT</span></h2>
-
-          <div class="detail-row">
-            <span class="detail-label">To:</span>
-            <span class="detail-value">${escapeHtml(draft.to || '')}</span>
-          </div>
-
-          ${draft.cc ? `
-            <div class="detail-row">
-              <span class="detail-label">Cc:</span>
-              <span class="detail-value">${escapeHtml(draft.cc)}</span>
-            </div>
-          ` : ''}
-
-          ${draft.bcc ? `
-            <div class="detail-row">
-              <span class="detail-label">Bcc:</span>
-              <span class="detail-value">${escapeHtml(draft.bcc)}</span>
-            </div>
-          ` : ''}
-
-          <div class="detail-row">
-            <span class="detail-label">Saved:</span>
-            <span class="detail-value">${new Date(draft.savedAt).toLocaleString()}</span>
-          </div>
-
+          <div class="detail-row"><span class="detail-label">To:</span><span class="detail-value">${escapeHtml(draft.to || '')}</span></div>
+          ${draft.cc ? `<div class="detail-row"><span class="detail-label">Cc:</span><span class="detail-value">${escapeHtml(draft.cc)}</span></div>` : ''}
+          ${draft.bcc ? `<div class="detail-row"><span class="detail-label">Bcc:</span><span class="detail-value">${escapeHtml(draft.bcc)}</span></div>` : ''}
+          <div class="detail-row"><span class="detail-label">Saved:</span><span class="detail-value">${new Date(draft.savedAt).toLocaleString()}</span></div>
           <div class="message-body">
             <iframe srcdoc="${escapeHtml(draft.body || '').replace(/"/g, '&quot;')}"
               style="width:100%; min-height:300px; border:none;"
               sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
               referrerpolicy="no-referrer"></iframe>
           </div>
-
           ${draft.attachments && draft.attachments.length ? `
             <div class="attachments">
               <strong>Attachments:</strong>
               <div style="margin-top: 12px;">
-                ${draft.attachments.map(att => `
-                  <div class="attachment-item">
-                    📎 ${escapeHtml(att.name)} (${Math.round(att.size/1024)} KB)
-                  </div>
-                `).join('')}
+                ${draft.attachments.map(att => `<div class="attachment-item">📎 ${escapeHtml(att.name)} (${Math.round(att.size/1024)} KB)</div>`).join('')}
               </div>
-            </div>
-          ` : ''}
-
-          <div style="margin-top: 20px;">
-            <button class="btn btn-primary" onclick="editDraft('${draft.id}')">Edit Draft</button>
-          </div>
+            </div>` : ''
+          }
+          <div style="margin-top: 20px;"><button class="btn btn-primary" onclick="editDraft('${draft.id}')">Edit Draft</button></div>
         </div>
       `;
     }
 
     function renderMessageContent(msg) {
-      const actions = document.getElementById('messageActions');
-      actions.style.display = 'flex';
-
-      const content = document.getElementById('messageContent');
+      document.getElementById('messageActions').style.display = 'flex';
 
       let bodyContent = '';
       if (msg.body?.contentType === 'html') {
@@ -1272,7 +1597,7 @@
         bodyContent = `<pre style="white-space: pre-wrap; word-wrap: break-word; font-family: inherit;">${escapeHtml(msg.body?.content || '')}</pre>`;
       }
 
-      content.innerHTML = `
+      document.getElementById('messageContent').innerHTML = `
         <div class="message-details">
           <h2>${escapeHtml(msg.subject || '(No subject)')}</h2>
 
@@ -1294,11 +1619,9 @@
           ${msg.ccRecipients?.length ? `
             <div class="detail-row">
               <span class="detail-label">Cc:</span>
-              <span class="detail-value">
-                ${msg.ccRecipients.map(r => escapeHtml(r.emailAddress.address)).join('; ')}
-              </span>
-            </div>
-          ` : ''}
+              <span class="detail-value">${msg.ccRecipients.map(r => escapeHtml(r.emailAddress.address)).join('; ')}</span>
+            </div>` : ''
+          }
 
           <div class="detail-row">
             <span class="detail-label">Date:</span>
@@ -1313,19 +1636,18 @@
               <div style="margin-top: 12px;">
                 ${(msg.attachments || []).map(att => `
                   <div class="attachment-item"
-                    onclick="previewAttachment('${msg.id}', '${att.id}', '${escapeHtml(att.name)}', '${att.contentType}')">
+                       onclick="previewAttachment('${msg.id}', '${att.id}', '${escapeHtml(att.name)}', '${att.contentType}')">
                     📎 ${escapeHtml(att.name)} (${Math.round(att.size/1024)} KB)
-                  </div>
-                `).join('')}
+                  </div>`).join('')}
               </div>
-            </div>
-          ` : ''}
+            </div>` : ''
+          }
         </div>
       `;
     }
 
     // ============================================
-    // SEARCH AND FILTER
+    // SEARCH / FILTER
     // ============================================
     let searchTimeout;
     async function searchMessages() {
@@ -1335,12 +1657,23 @@
         if (!query) { loadFolder(currentFolder); return; }
 
         try {
-          const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${currentFolder}/messages?$search="${query}"&$top=20`);
-          if (!response.ok) throw new Error('Search failed');
+          const response = await fetch(
+            `https://graph.microsoft.com/v1.0/me/mailFolders/${currentFolder}/messages?$search="${query}"&$top=20`,
+            { headers: { 'Authorization': `Bearer ${accessToken}` } }
+          );
 
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After') || 10;
+            updateStatus(`⏳ Rate limited. Waiting ${retryAfter}s...`, 'loading');
+            await delay(retryAfter * 1000);
+            return searchMessages();
+          }
+
+          if (!response.ok) throw new Error('Search failed');
           const data = await response.json();
           messages = data.value || [];
           renderMessageList();
+
         } catch (error) {
           console.error('Search error:', error);
         }
@@ -1360,143 +1693,116 @@
       if (!currentMessageId || !confirm('Delete this message?')) return;
 
       try {
-        const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, { method: 'DELETE' });
+        const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
         if (!response.ok && response.status !== 204) throw new Error('Delete failed');
 
-        await delay(250);
+        await delay(300);
         loadFolder(currentFolder);
         document.getElementById('messageContent').innerHTML = '<div class="loading-message">Message deleted</div>';
         document.getElementById('messageActions').style.display = 'none';
+
       } catch (error) {
         alert('Error deleting message');
       }
     }
 
-    // ✅ FIXED: move to Junk Email by using /move to the well-known folder "junkemail"
-    async function moveMessageToJunk(messageId) {
-      const junkId = await getJunkIdCached();
-
-      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/move`, {
+    // ---- IMPORTANT FIX ----
+    // We DO NOT use /markAsJunk here (your payload error).
+    // We simply MOVE the message to Junk folder using /move.
+    async function moveMessageToFolder(messageId, destinationFolderId) {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/move`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ destinationId: junkId })
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destinationId: destinationFolderId })
       });
 
       if (!res.ok) {
         const err = await res.text();
-        throw new Error('Move to Junk failed: ' + err);
+        throw new Error(err);
       }
-
-      return await res.json(); // moved message
+      return await res.json();
     }
 
-    async function addCategory(messageId, categoryName) {
-      if (!categoryName) return;
-      // Get existing categories then add (avoid overwriting if possible)
-      try {
-        const getRes = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}?$select=categories`);
-        if (!getRes.ok) return;
-        const msg = await getRes.json();
-        const existing = Array.isArray(msg.categories) ? msg.categories : [];
-        const next = Array.from(new Set([...existing, categoryName]));
-
-        await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ categories: next })
-        });
-      } catch (e) {}
-    }
-
-    async function quickForwardReport(toAddress, subject, htmlBody) {
-      if (!toAddress) return;
-      const message = {
-        subject,
-        body: { contentType: 'HTML', content: htmlBody },
-        toRecipients: [{ emailAddress: { address: toAddress } }]
-      };
-      await graphFetch('https://graph.microsoft.com/v1.0/me/sendMail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, saveToSentItems: true })
-      });
-    }
-
-    async function reportJunk() {
+    async function moveCurrentMessageToJunk() {
       if (!currentMessageId) return;
-      if (!confirm('Report as Junk and move this message to Junk Email?')) return;
-
       try {
-        // Mark category first (optional), then move
-        await addCategory(currentMessageId, 'Junk');
-
-        // Optional: notify security mailbox
-        if (REPORT_JUNK_TO) {
-          const msg = messages.find(m => m.id === currentMessageId);
-          const subj = msg?.subject || '(No subject)';
-          await quickForwardReport(
-            REPORT_JUNK_TO,
-            `Reported Junk: ${subj}`,
-            `User reported a message as <b>Junk</b>.<br><br><b>Subject:</b> ${escapeHtml(subj)}<br><b>From:</b> ${escapeHtml(msg?.from?.emailAddress?.address || '')}`
-          );
-        }
-
-        const moved = await moveMessageToJunk(currentMessageId);
-
-        // Update UI: reload junk folder and select moved message (optional)
-        alert('✅ Reported as Junk and moved to Junk Email.');
-        await delay(200);
-        await loadFolder('junkemail');
-        currentMessageId = moved.id;
-        await loadMessage(moved.id);
+        const junkId = await getJunkIdCached();
+        await moveMessageToFolder(currentMessageId, junkId);
+        alert('✅ Moved to Junk');
+        currentMessageId = null;
+        loadFolder(currentFolder);
+        document.getElementById('messageContent').innerHTML = '<div class="loading-message">Moved to Junk</div>';
+        document.getElementById('messageActions').style.display = 'none';
       } catch (e) {
-        alert('❌ ' + e.message);
+        alert('❌ Move to Junk failed: ' + (e.message || e));
         console.error(e);
       }
     }
 
-    async function reportPhishing() {
+    // "Report phishing" UX:
+    // - Move this message to junk
+    // - Try to create a server-side rule: from sender -> move to junk (future mail)
+    async function reportPhishingCurrentMessage() {
       if (!currentMessageId) return;
-      if (!confirm('Report as Phishing and move this message to Junk Email?')) return;
+
+      // Get full message so we have sender address
+      let senderAddress = '';
+      try {
+        const msgRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (msgRes.ok) {
+          const msg = await msgRes.json();
+          senderAddress = msg?.from?.emailAddress?.address || '';
+        }
+      } catch (_) {}
 
       try {
-        await addCategory(currentMessageId, 'Phishing');
+        const junkId = await getJunkIdCached();
+        await moveMessageToFolder(currentMessageId, junkId);
 
-        if (REPORT_PHISHING_TO) {
-          const msg = messages.find(m => m.id === currentMessageId);
-          const subj = msg?.subject || '(No subject)';
-          await quickForwardReport(
-            REPORT_PHISHING_TO,
-            `Reported Phishing: ${subj}`,
-            `User reported a message as <b>Phishing</b>.<br><br><b>Subject:</b> ${escapeHtml(subj)}<br><b>From:</b> ${escapeHtml(msg?.from?.emailAddress?.address || '')}`
-          );
+        // Try to create "always junk this sender" rule
+        if (senderAddress) {
+          try {
+            await createAlwaysJunkSenderRule(senderAddress);
+            alert(`🎣 Reported phishing + created rule: ${senderAddress} → Junk`);
+          } catch (ruleErr) {
+            alert(
+              `🎣 Reported phishing (moved to Junk).\n\n` +
+              `⚠️ Could not create "always junk" rule for future mail.\n` +
+              `Reason: ${ruleErr.message || ruleErr}\n\n` +
+              `Fix: re-auth token/app with MailboxSettings.ReadWrite for rules.`
+            );
+          }
+        } else {
+          alert('🎣 Reported phishing (moved to Junk). Could not detect sender address to create an always-junk rule.');
         }
 
-        const moved = await moveMessageToJunk(currentMessageId);
+        currentMessageId = null;
+        loadFolder(currentFolder);
+        document.getElementById('messageContent').innerHTML = '<div class="loading-message">Reported phishing (moved to Junk)</div>';
+        document.getElementById('messageActions').style.display = 'none';
 
-        alert('✅ Reported as Phishing and moved to Junk Email.');
-        await delay(200);
-        await loadFolder('junkemail');
-        currentMessageId = moved.id;
-        await loadMessage(moved.id);
       } catch (e) {
-        alert('❌ ' + e.message);
+        alert('❌ Report phishing failed: ' + (e.message || e));
         console.error(e);
       }
     }
 
     // ============================================
-    // RULE MANAGEMENT - REAL SERVER-SIDE RULES
+    // RULES - SERVER-SIDE
     // ============================================
     async function openRulesModal() {
       document.getElementById('rulesModal').classList.add('active');
-
       if (!accessToken) {
         document.getElementById('rulesList').innerHTML =
           '<div class="loading-message">Connect first to load real Outlook rules.</div>';
         return;
       }
-
       await renderServerRulesList();
     }
 
@@ -1506,27 +1812,20 @@
     }
 
     function handleConditionChange() {
-      const condition = document.getElementById('conditionType').value;
-      selectedCondition = condition;
-
-      const needsValue = ['from', 'to', 'subject', 'body', 'senderAddress', 'recipientAddress', 'header', 'myName', 'importance'].includes(condition);
+      selectedCondition = document.getElementById('conditionType').value;
+      const needsValue = ['from', 'to', 'subject', 'body', 'importance'].includes(selectedCondition);
       document.getElementById('conditionValue').style.display = needsValue ? 'block' : 'none';
     }
 
     function handleActionChange() {
-      const action = document.getElementById('actionType').value;
-      selectedAction = action;
-
-      // markJunk doesn't need a value (it moves to Junk Email automatically)
-      const needsValue = ['move', 'copy', 'forward', 'forwardAttachment', 'redirect', 'categorize', 'importance'].includes(action);
+      selectedAction = document.getElementById('actionType').value;
+      const needsValue = ['move', 'copy', 'forward', 'redirect'].includes(selectedAction);
       document.getElementById('actionValue').style.display = needsValue ? 'block' : 'none';
 
       if (needsValue) {
         document.getElementById('actionInput').placeholder =
-          action.includes('forward') ? 'Enter email address' :
-          action.includes('categorize') ? 'Enter category name' :
-          action === 'importance' ? 'Enter low, normal, or high' :
-          'Enter folder name';
+          (selectedAction === 'forward' || selectedAction === 'redirect') ? 'Enter email address'
+          : 'Enter folder name';
       }
     }
 
@@ -1542,7 +1841,6 @@
     function addAdditionalAction() {
       const actionType = document.getElementById('additionalActionType').value;
       const actionValue = document.getElementById('additionalActionInput').value;
-
       if (!actionType) { alert('Please select an action'); return; }
 
       additionalActions.push({ type: actionType, value: actionValue });
@@ -1574,9 +1872,21 @@
       renderAdditionalActions();
     }
 
+    document.getElementById('additionalActionType')?.addEventListener('change', function() {
+      const action = this.value;
+      const needsValue = ['move', 'copy', 'forward', 'redirect'].includes(action);
+      document.getElementById('additionalActionValue').style.display = needsValue ? 'block' : 'none';
+      if (needsValue) {
+        document.getElementById('additionalActionInput').placeholder =
+          (action === 'forward' || action === 'redirect') ? 'Enter email address' : 'Enter folder name';
+      }
+    });
+
     async function fetchServerRules() {
       const inboxId = await getInboxIdCached();
-      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`);
+      const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
       if (!res.ok) {
         const err = await res.text();
         throw new Error('Failed to load server rules: ' + err);
@@ -1627,10 +1937,9 @@
     async function toggleServerRule(ruleId, currentlyEnabled) {
       try {
         const inboxId = await getInboxIdCached();
-
-        const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
+        const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ isEnabled: !currentlyEnabled })
         });
 
@@ -1651,9 +1960,9 @@
 
       try {
         const inboxId = await getInboxIdCached();
-
-        const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
-          method: 'DELETE'
+        const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
         });
 
         if (!res.ok && res.status !== 204) {
@@ -1681,11 +1990,8 @@
         case 'subject': conditions.subjectContains = [cv]; break;
         case 'body': conditions.bodyContains = [cv]; break;
         case 'hasAttachment': conditions.hasAttachments = true; break;
-        case 'importance':
-          conditions.importance = (cv || 'normal').toLowerCase() === 'high' ? 'high' : 'normal';
-          break;
-        default:
-          throw new Error(`Condition not supported for server rule: ${rule.condition.type}`);
+        case 'importance': conditions.importance = (cv || 'normal').toLowerCase() === 'high' ? 'high' : 'normal'; break;
+        default: throw new Error(`Condition not supported for server rule: ${rule.condition.type}`);
       }
 
       // Exceptions
@@ -1697,6 +2003,7 @@
           case 'to': exceptions.recipientContains = [ev]; break;
           case 'subject': exceptions.subjectContains = [ev]; break;
           case 'hasAttachment': exceptions.hasAttachments = true; break;
+          default: console.warn('Unsupported exception:', rule.exception.type);
         }
       }
 
@@ -1718,20 +2025,17 @@
             actions.copyToFolder = folderId;
             break;
           }
+          case 'moveJunk': {
+            const junkId = await getJunkIdCached();
+            actions.moveToFolder = junkId;
+            break;
+          }
           case 'delete':
             actions.delete = true;
             break;
           case 'markRead':
             actions.markAsRead = true;
             break;
-
-          // ✅ UPDATED: "Move to Junk Email" rule action now uses well-known junkemail folder id
-          case 'markJunk': {
-            const junkId = await getJunkIdCached();
-            actions.moveToFolder = junkId;
-            break;
-          }
-
           case 'forward': {
             if (!v) throw new Error('Forward requires an email address');
             actions.forwardTo = v.split(',').map(email => ({ emailAddress: { address: email.trim() } }));
@@ -1742,18 +2046,15 @@
             actions.redirectTo = v.split(',').map(email => ({ emailAddress: { address: email.trim() } }));
             break;
           }
-          case 'importance': {
-            const level = (v || 'normal').toLowerCase();
-            actions.markImportance = (level === 'high' || level === 'low') ? level : 'normal';
-            break;
-          }
           default:
             console.warn('Unsupported server action:', a.type);
         }
       }
 
+      // stopProcessingRules belongs inside actions
       actions.stopProcessingRules = !!rule.stopProcessing;
 
+      // Sequence: append
       const existing = await fetchServerRules();
       const nextSeq = existing.length ? Math.max(...existing.map(r => r.sequence || 0)) + 1 : 1;
 
@@ -1764,12 +2065,11 @@
         conditions,
         actions
       };
-
       if (Object.keys(exceptions).length) payload.exceptions = exceptions;
 
-      const res = await graphFetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules`, {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
@@ -1779,6 +2079,17 @@
       }
 
       return await res.json();
+    }
+
+    async function createAlwaysJunkSenderRule(senderEmail) {
+      const rule = {
+        name: `Always Junk: ${senderEmail}`,
+        condition: { type: 'from', value: senderEmail },
+        actions: [{ type: 'moveJunk', value: '' }],
+        exception: null,
+        stopProcessing: true
+      };
+      return await createServerSideRule(rule);
     }
 
     async function saveRule() {
@@ -1834,7 +2145,6 @@
     function switchView(view, evt) {
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
       if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
-
       document.getElementById('mailView').style.display = view === 'mail' ? 'flex' : 'none';
       if (view === 'rules') openRulesModal();
     }
@@ -1845,7 +2155,11 @@
     async function previewAttachment(messageId, attachmentId, fileName, contentType) {
       if (contentType === 'application/pdf') {
         try {
-          const response = await graphFetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/attachments/${attachmentId}/$value`);
+          const response = await fetch(
+            `https://graph.microsoft.com/v1.0/me/messages/${messageId}/attachments/${attachmentId}/$value`,
+            { headers: { 'Authorization': `Bearer ${accessToken}` } }
+          );
+
           if (response.ok) {
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
@@ -1857,7 +2171,7 @@
           console.error('Error loading PDF:', error);
         }
       } else {
-        downloadAttachment(messageId, attachmentId, fileName);
+        alert('Download attachment functionality coming soon!');
       }
     }
 
@@ -1866,17 +2180,22 @@
       document.getElementById('pdfFrame').src = '';
     }
 
-    function downloadAttachment(messageId, attachmentId, fileName) {
-      alert('Download attachment functionality coming soon!');
-    }
-
     // ============================================
-    // COMPOSE FUNCTIONS
+    // COMPOSE
     // ============================================
     function openCompose() {
       document.getElementById('composeModal').classList.add('active');
       attachments = [];
       updateAttachmentList();
+
+      // Load signature settings fresh (in case changed)
+      signatureSettings = loadSignatureSettingsFromStorage();
+
+      // Ensure paste handling installed
+      setupComposeEditorPasteHandling();
+
+      // Optional: auto-insert signature if you want:
+      // if (signatureSettings.html) { setTimeout(() => insertSignature(), 0); }
     }
 
     function closeCompose() {
@@ -1885,10 +2204,11 @@
     }
 
     function clearCompose() {
-      ['to', 'cc', 'bcc', 'subject', 'body'].forEach(field => {
+      ['to', 'cc', 'bcc', 'subject'].forEach(field => {
         const el = document.getElementById(`compose${field.charAt(0).toUpperCase() + field.slice(1)}`);
         if (el) el.value = '';
       });
+      setComposeHtml('');
       attachments = [];
       updateAttachmentList();
     }
@@ -1933,29 +2253,58 @@
       const cc = document.getElementById('composeCc').value.split(',').map(e => e.trim()).filter(e => e);
       const bcc = document.getElementById('composeBcc').value.split(',').map(e => e.trim()).filter(e => e);
 
+      // NEW: Use editor HTML exactly (no newline -> <br> flattening)
+      let htmlBody = getComposeHtml();
+
+      // NEW: Convert any embedded data:image/* to CID inline attachments (Outlook-style)
+      const { html, inlineAttachments } = extractInlineImagesAsCid(htmlBody);
+      htmlBody = html;
+
       const message = {
         subject: document.getElementById('composeSubject').value || '(No subject)',
-        body: { contentType: 'HTML', content: document.getElementById('composeBody').value.replace(/\n/g, '<br>') || '' },
+        body: {
+          contentType: 'HTML',
+          content: htmlBody || ''
+        },
         toRecipients: to.map(email => ({ emailAddress: { address: email } })),
         ccRecipients: cc.map(email => ({ emailAddress: { address: email } })),
         bccRecipients: bcc.map(email => ({ emailAddress: { address: email } }))
       };
 
+      // Attachments: regular + inline
+      const allAttachments = [];
+
       if (attachments.length > 0) {
-        message.attachments = attachments.map(att => ({
-          '@odata.type': '#microsoft.graph.fileAttachment',
-          name: att.name,
-          contentType: att.contentType || 'application/octet-stream',
-          contentBytes: att.content
-        }));
+        attachments.forEach(att => {
+          allAttachments.push({
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            name: att.name,
+            contentType: att.contentType || 'application/octet-stream',
+            contentBytes: att.content
+          });
+        });
+      }
+
+      if (inlineAttachments.length > 0) {
+        inlineAttachments.forEach(a => allAttachments.push(a));
+      }
+
+      if (allAttachments.length > 0) {
+        message.attachments = allAttachments;
       }
 
       try {
-        const response = await graphFetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ message, saveToSentItems: true })
         });
+
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After') || 10;
+          alert(`Rate limited. Please wait ${retryAfter} seconds.`);
+          return;
+        }
 
         if (response.ok) {
           alert('Email sent successfully!');
@@ -1966,6 +2315,7 @@
           const error = await response.text();
           alert('Error sending email: ' + error);
         }
+
       } catch (error) {
         alert('Error sending email: ' + error.message);
       }
@@ -1978,8 +2328,8 @@
         cc: document.getElementById('composeCc').value,
         bcc: document.getElementById('composeBcc').value,
         subject: document.getElementById('composeSubject').value,
-        body: document.getElementById('composeBody').value,
-        bodyPreview: (document.getElementById('composeBody').value || '').substring(0, 100),
+        body: getComposeHtml(), // NEW: store HTML
+        bodyPreview: (document.getElementById('composeBody').innerText || '').substring(0, 100),
         attachments: [...attachments],
         savedAt: new Date().toISOString()
       };
@@ -2002,61 +2352,49 @@
       document.getElementById('composeCc').value = draft.cc || '';
       document.getElementById('composeBcc').value = draft.bcc || '';
       document.getElementById('composeSubject').value = draft.subject || '';
-      document.getElementById('composeBody').value = draft.body || '';
+      setComposeHtml(draft.body || '');
       attachments = draft.attachments || [];
       updateAttachmentList();
     }
 
     function replyToMessage() {
-      const msg = messages.find(m => m.id === currentMessageId);
+      const msg = getCurrentMessageFromList();
       if (!msg) return;
-
       openCompose();
       document.getElementById('composeTo').value = msg.from?.emailAddress?.address || '';
       document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
     }
 
     function replyAll() {
-      const msg = messages.find(m => m.id === currentMessageId);
+      const msg = getCurrentMessageFromList();
       if (!msg) return;
-
       openCompose();
-      const to = [msg.from?.emailAddress?.address];
-      const cc = msg.toRecipients?.map(r => r.emailAddress.address) || [];
-
+      const to = [msg.from?.emailAddress?.address].filter(Boolean);
+      const cc = (msg.toRecipients || []).map(r => r.emailAddress.address);
       document.getElementById('composeTo').value = to.join(', ');
       document.getElementById('composeCc').value = cc.join(', ');
       document.getElementById('composeSubject').value = `Re: ${msg.subject || ''}`;
     }
 
     function forwardMessage() {
-      const msg = messages.find(m => m.id === currentMessageId);
+      const msg = getCurrentMessageFromList();
       if (!msg) return;
-
       openCompose();
       document.getElementById('composeSubject').value = `Fwd: ${msg.subject || ''}`;
-      document.getElementById('composeBody').value =
-        `\n\n-------- Forwarded Message --------\nFrom: ${msg.from?.emailAddress?.name}\nDate: ${new Date(msg.receivedDateTime).toLocaleString()}\nSubject: ${msg.subject}\n\n${msg.bodyPreview}`;
+      setComposeHtml(
+        `<div><br></div><div>-------- Forwarded Message --------</div>` +
+        `<div>From: ${escapeHtml(msg.from?.emailAddress?.name || '')}</div>` +
+        `<div>Date: ${escapeHtml(new Date(msg.receivedDateTime).toLocaleString())}</div>` +
+        `<div>Subject: ${escapeHtml(msg.subject || '')}</div>` +
+        `<div><br></div><div>${escapeHtml(msg.bodyPreview || '')}</div>`
+      );
     }
 
     function moveToFolder() { alert('Move to folder functionality coming soon!'); }
 
-    // Additional action modal handler
-    document.getElementById('additionalActionType')?.addEventListener('change', function() {
-      const action = this.value;
-      const needsValue = ['move', 'copy', 'forward', 'forwardAttachment', 'redirect', 'categorize', 'importance'].includes(action);
-      document.getElementById('additionalActionValue').style.display = needsValue ? 'block' : 'none';
-
-      if (needsValue) {
-        document.getElementById('additionalActionInput').placeholder =
-          action.includes('forward') ? 'Enter email address' :
-          action.includes('categorize') ? 'Enter category name' :
-          action === 'importance' ? 'Enter low, normal, or high' :
-          'Enter folder name';
-      }
-    });
-
-    // Load saved token on startup
+    // ============================================
+    // ON LOAD
+    // ============================================
     window.onload = function() {
       const savedAccess = localStorage.getItem('accessToken');
       if (savedAccess) {
@@ -2067,12 +2405,18 @@
         if (payload && payload.exp) {
           const expiryDate = new Date(payload.exp * 1000);
           const now = new Date();
-          if (expiryDate > now) setTimeout(connectWithToken, 300);
-          else { localStorage.removeItem('accessToken'); updateStatus('🔌 Token expired - please enter new token', 'invalid'); }
+          if (expiryDate > now) setTimeout(connectWithToken, 400);
+          else {
+            localStorage.removeItem('accessToken');
+            updateStatus('🔌 Token expired - please enter new token', 'invalid');
+          }
         } else {
-          setTimeout(connectWithToken, 300);
+          setTimeout(connectWithToken, 400);
         }
       }
+
+      // Prep signature state + meta
+      signatureSettings = loadSignatureSettingsFromStorage();
     };
   </script>
 </body>
