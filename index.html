@@ -633,7 +633,12 @@
             <button class="action-btn" onclick="replyAll()">↩↪ Reply All</button>
             <button class="action-btn" onclick="forwardMessage()">↪ Forward</button>
             <button class="action-btn" onclick="deleteMessage()">🗑 Delete</button>
-            <button class="action-btn" onclick="markAsJunk()">🚫 Junk</button>
+
+            <!-- UPDATED: split "junk" actions -->
+            <button class="action-btn" onclick="moveToJunk()">🚫 Move to Junk</button>
+            <button class="action-btn" onclick="reportAsJunk()">🛡 Report Junk</button>
+            <button class="action-btn" onclick="reportAsPhishing()">🎣 Report Phishing</button>
+
             <button class="action-btn" onclick="moveToFolder()">📁 Move</button>
           </div>
           <div id="messageContent">
@@ -740,7 +745,10 @@
                   </optgroup>
                   <optgroup label="Mark message">
                     <option value="markRead">Mark as read</option>
-                    <option value="markJunk">Mark as Junk</option>
+
+                    <!-- UPDATED LABEL -->
+                    <option value="markJunk">Move/Report as Junk</option>
+
                     <option value="importance">Mark with importance</option>
                     <option value="categorize">Categorize</option>
                   </optgroup>
@@ -815,7 +823,10 @@
             </optgroup>
             <optgroup label="Mark message">
               <option value="markRead">Mark as read</option>
-              <option value="markJunk">Mark as Junk</option>
+
+              <!-- UPDATED LABEL -->
+              <option value="markJunk">Move/Report as Junk</option>
+
               <option value="importance">Mark with importance</option>
               <option value="categorize">Categorize</option>
             </optgroup>
@@ -891,19 +902,6 @@
       return null;
     }
 
-    // ✅ ADDED (Step 1): scope check helper
-    function tokenHasScope(requiredScope) {
-      const payload = decodeToken(accessToken);
-      const scopes = (payload?.scp || '').split(' ').filter(Boolean);
-      return scopes.includes(requiredScope);
-    }
-
-    // ✅ ADDED: quick helper to show current scopes (optional, but helpful)
-    function getTokenScopes() {
-      const payload = decodeToken(accessToken);
-      return (payload?.scp || '').split(' ').filter(Boolean);
-    }
-
     function checkTokenExpiry() {
       if (!accessToken) return false;
 
@@ -942,6 +940,17 @@
         .replace(/'/g, '&#039;');
     }
 
+    // ArrayBuffer -> base64 (for optional phishing submission)
+    function arrayBufferToBase64(buffer) {
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(binary);
+    }
+
     // ============================================
     // CONNECT WITH TOKEN
     // ============================================
@@ -968,13 +977,7 @@
         const userData = await userResponse.json();
         userEmail = userData.mail || userData.userPrincipalName;
 
-        // ✅ ADDED: show a warning if rules scope missing (non-blocking)
-        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-          updateStatus(`✅ Connected as ${userEmail} (⚠️ Rules disabled)`, 'warning');
-          console.warn('Missing scope MailboxSettings.ReadWrite. Current scopes:', getTokenScopes());
-        } else {
-          updateStatus(`✅ Connected as ${userEmail}`, 'valid');
-        }
+        updateStatus(`✅ Connected as ${userEmail}`, 'valid');
 
         localStorage.setItem('accessToken', accessToken);
         checkTokenExpiry();
@@ -1097,12 +1100,9 @@
 
       try {
         let url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folderId}/messages?$top=20&$orderby=receivedDateTime DESC&$expand=attachments`;
-
         if (showOnlyUnread) url += '&$filter=isRead eq false';
 
-        const response = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
+        const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
 
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After') || 10;
@@ -1131,13 +1131,7 @@
         }
 
         renderMessageList();
-
-        // keep the connected status consistent with rules scope
-        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-          updateStatus(`✅ Connected as ${userEmail} (⚠️ Rules disabled)`, 'warning');
-        } else {
-          updateStatus(`✅ Connected as ${userEmail}`, 'valid');
-        }
+        updateStatus(`✅ Connected as ${userEmail}`, 'valid');
 
         await delay(500);
         loadFolders();
@@ -1439,7 +1433,8 @@
       }
     }
 
-    async function markAsJunk() {
+    // UPDATED: keep your original markAsJunk behavior but rename it to "moveToJunk"
+    async function moveToJunk() {
       if (!currentMessageId) return;
 
       try {
@@ -1449,14 +1444,120 @@
           body: JSON.stringify({ moveToJunk: true })
         });
 
-        if (!response.ok) throw new Error('Failed to mark as junk');
+        if (!response.ok) throw new Error('Failed to move to junk');
 
         await delay(500);
         loadFolder('inbox');
-        alert('Message moved to junk');
+        alert('Moved to Junk');
 
       } catch (error) {
-        alert('Error marking as junk');
+        alert('Error moving to junk');
+      }
+    }
+
+    // NEW: "Report Junk" (best-effort)
+    // Graph reliably supports markAsJunk; true "report to Microsoft / phishing pipeline" typically requires Security/Defender submission APIs + permissions.
+    async function reportAsJunk() {
+      if (!currentMessageId) return;
+      if (!confirm('Report this message as Junk? (It will be moved to Junk)')) return;
+
+      try {
+        const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ moveToJunk: true })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err || 'Report junk failed');
+        }
+
+        await delay(500);
+        loadFolder('inbox');
+        alert('✅ Reported as Junk (moved to Junk).');
+      } catch (e) {
+        alert('❌ Report Junk failed: ' + e.message);
+        console.error(e);
+      }
+    }
+
+    // NEW: "Report Phishing" (best-effort)
+    // 1) Move message to Junk via markAsJunk (reliable)
+    // 2) OPTIONAL: attempt a security submission via /beta if your tenant/token has the Defender/ThreatSubmission permissions
+    async function reportAsPhishing() {
+      if (!currentMessageId) return;
+      if (!confirm('Report this message as Phishing? (It will be moved to Junk)')) return;
+
+      // Step 1: move to junk (works with Mail.ReadWrite)
+      try {
+        const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/markAsJunk`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ moveToJunk: true })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error('Move to junk failed: ' + err);
+        }
+      } catch (e) {
+        alert('❌ Could not move message to Junk: ' + e.message);
+        console.error(e);
+        return;
+      }
+
+      // Step 2 (optional): try to submit the raw MIME via Graph Security (beta)
+      // If you don’t have permissions, this will fail gracefully and still keep the email in Junk.
+      let submissionSucceeded = false;
+      try {
+        // Get MIME content
+        const mimeRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${currentMessageId}/$value`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        if (mimeRes.ok) {
+          const buf = await mimeRes.arrayBuffer();
+          const mimeBase64 = arrayBufferToBase64(buf);
+
+          // Best-effort payload (varies by tenant/policy/permissions)
+          // If your org has threat submission enabled, this may work; otherwise it will return 403/400.
+          const payload = {
+            "@odata.type": "#microsoft.graph.security.emailContentThreatSubmission",
+            "category": "phishing",
+            "recipientEmailAddress": userEmail || "",
+            "fileName": `message_${currentMessageId}.eml`,
+            "fileContent": mimeBase64
+          };
+
+          const submitRes = await fetch(`https://graph.microsoft.com/beta/security/threatSubmission/emailThreats`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (submitRes.ok) {
+            submissionSucceeded = true;
+          } else {
+            // swallow but log so you can see real error
+            const err = await submitRes.text();
+            console.warn('Phishing submission failed (beta):', err);
+          }
+        } else {
+          const err = await mimeRes.text();
+          console.warn('Could not fetch MIME $value:', err);
+        }
+      } catch (e) {
+        console.warn('Phishing submission exception:', e);
+      }
+
+      await delay(500);
+      loadFolder('inbox');
+
+      if (submissionSucceeded) {
+        alert('✅ Reported as Phishing (moved to Junk + submitted).');
+      } else {
+        alert('✅ Moved to Junk. (Phishing submission may require extra Security/Defender permissions; check console for details.)');
       }
     }
 
@@ -1470,24 +1571,6 @@
       if (!accessToken) {
         document.getElementById('rulesList').innerHTML =
           '<div class="loading-message">Connect first to load real Outlook rules.</div>';
-        return;
-      }
-
-      // ✅ ADDED (Step 2): block loading rules if permission missing
-      if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-        const scopes = getTokenScopes().join(' ');
-        document.getElementById('rulesList').innerHTML = `
-          <div class="loading-message">
-            ❌ Your token can't manage Inbox Rules.<br><br>
-            Missing scope: <b>MailboxSettings.ReadWrite</b><br><br>
-            Current scopes (scp):<br>
-            <div style="margin-top:10px; font-family:Consolas,monospace; font-size:12px; background:#fff; padding:10px; border:1px solid #edebe9; border-radius:6px; max-height:140px; overflow:auto;">
-              ${escapeHtml(scopes || '(none)')}
-            </div>
-            <div style="margin-top:12px;">
-              Get a new token that includes <b>MailboxSettings.ReadWrite</b>, then reconnect.
-            </div>
-          </div>`;
         return;
       }
 
@@ -1568,6 +1651,7 @@
     }
 
     // -------- Server rules API helpers --------
+
     async function fetchServerRules() {
       const inboxId = await getInboxIdCached();
       const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules?$orderby=sequence`, {
@@ -1622,12 +1706,6 @@
 
     async function toggleServerRule(ruleId, currentlyEnabled) {
       try {
-        // ✅ ADDED: protect toggle too
-        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-          alert("❌ Missing scope: MailboxSettings.ReadWrite.\nCan't enable/disable rules with this token.");
-          return;
-        }
-
         const inboxId = await getInboxIdCached();
 
         const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
@@ -1652,12 +1730,6 @@
       if (!confirm('Delete this rule from Outlook (server)?')) return;
 
       try {
-        // ✅ ADDED: protect delete too
-        if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-          alert("❌ Missing scope: MailboxSettings.ReadWrite.\nCan't delete rules with this token.");
-          return;
-        }
-
         const inboxId = await getInboxIdCached();
 
         const res = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${inboxId}/messageRules/${ruleId}`, {
@@ -1677,7 +1749,7 @@
       }
     }
 
-    // -------- Create server-side rule --------
+    // -------- Create server-side rule (UPDATED payload) --------
     async function createServerSideRule(rule) {
       const inboxId = await getInboxIdCached();
 
@@ -1779,7 +1851,7 @@
         }
       }
 
-      // stopProcessingRules belongs inside actions
+      // IMPORTANT: stopProcessingRules belongs inside actions
       actions.stopProcessingRules = !!rule.stopProcessing;
 
       // Sequence: append after existing
@@ -1813,18 +1885,6 @@
     }
 
     async function saveRule() {
-      // ✅ ADDED (Step 3): hard block rule saving without proper scope
-      if (!tokenHasScope('MailboxSettings.ReadWrite')) {
-        const scopes = getTokenScopes().join(' ');
-        alert(
-          "❌ Your token can't manage Inbox Rules.\n\n" +
-          "Missing scope: MailboxSettings.ReadWrite\n\n" +
-          "Current scopes (scp):\n" + (scopes || '(none)') + "\n\n" +
-          "Re-authenticate and request MailboxSettings.ReadWrite, then try again."
-        );
-        return;
-      }
-
       const ruleName = document.getElementById('ruleName').value.trim();
       if (!ruleName) { alert('Please enter a rule name'); return; }
 
@@ -1873,7 +1933,7 @@
     }
 
     // ============================================
-    // VIEW SWITCHING (FIX: pass event explicitly)
+    // VIEW SWITCHING
     // ============================================
     function switchView(view, evt) {
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
